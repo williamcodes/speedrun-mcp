@@ -1,5 +1,7 @@
 # speedrun-mcp
 
+<!-- mcp-name: io.github.williamcodes/speedrun-mcp -->
+
 A [Model Context Protocol](https://modelcontextprotocol.io) server for
 [speedrun.com](https://www.speedrun.com). It lets an AI assistant query games,
 categories, leaderboards, world records, players and their personal bests —
