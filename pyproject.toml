@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speedrun-mcp"
+version = "0.1.0"
+description = "Model Context Protocol server for the speedrun.com API — games, leaderboards, world records, players and personal bests."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "William Jeffries" }]
+keywords = ["mcp", "model-context-protocol", "speedrun", "speedrun.com", "llm", "claude"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Games/Entertainment",
+]
+dependencies = [
+    "mcp>=1.2.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5"]
+
+[project.urls]
+Homepage = "https://github.com/williamcodes/speedrun-mcp"
+Issues = "https://github.com/williamcodes/speedrun-mcp/issues"
+"speedrun.com API" = "https://github.com/speedruncomorg/api"
+
+[project.scripts]
+speedrun-mcp = "speedrun_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = ["network: tests that hit the live speedrun.com API"]
+
+[tool.ruff]
+line-length = 100
