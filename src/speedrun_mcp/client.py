@@ -1,6 +1,9 @@
 """Thin async client for the speedrun.com REST API (v1).
 
-The public API requires no authentication for the read endpoints used here.
+Read endpoints need no authentication. The identity and write endpoints
+(profile, notifications, run submission/moderation) authenticate with a single
+``X-API-Key`` header; pass the key to :class:`SpeedrunClient` and it is attached
+to every request. The key is never placed in a request body.
 Docs: https://github.com/speedruncomorg/api/tree/master/version1
 """
 
@@ -36,6 +39,13 @@ class NotFoundError(SpeedrunError):
     """Raised when the API returns HTTP 404 for a resource (bad id/filters)."""
 
 
+class AuthError(SpeedrunError):
+    """Raised when the API rejects us for a missing/invalid API key.
+
+    speedrun.com answers 403 (not 401) for both a missing and an invalid key.
+    """
+
+
 class SpeedrunClient:
     """Minimal async wrapper around the speedrun.com API.
 
@@ -43,12 +53,27 @@ class SpeedrunClient:
     manager or remember to ``await close()``.
     """
 
-    def __init__(self, *, timeout: float = 20.0) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        timeout: float = 20.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+        if api_key:
+            # The single auth header for identity/write endpoints. It never goes
+            # into a request body, a tool argument, or (see _error_message) a log.
+            headers["X-API-Key"] = api_key
+        #: Whether an API key was supplied (so callers can fail fast with a clear
+        #: message before hitting an endpoint that would 403).
+        self.authenticated = bool(api_key)
         self._http = httpx.AsyncClient(
             base_url=API_BASE,
             timeout=timeout,
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            headers=headers,
             follow_redirects=True,  # abbreviations 30x-redirect to ID-based URLs
+            transport=transport,  # injectable for offline tests
         )
 
     async def __aenter__(self) -> "SpeedrunClient":
@@ -60,11 +85,22 @@ class SpeedrunClient:
     async def close(self) -> None:
         await self._http.aclose()
 
-    async def _request(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """GET a path and return the full parsed JSON body (incl. pagination)."""
+    async def _request(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        method: str = "GET",
+        json: Any | None = None,
+    ) -> Any:
+        """Send a request and return the full parsed JSON body (incl. pagination).
+
+        GET by default; pass ``method`` / ``json`` for the authenticated write
+        endpoints (POST/PUT/DELETE).
+        """
         clean = {k: v for k, v in (params or {}).items() if v is not None}
         try:
-            resp = await self._http.get(path, params=clean)
+            resp = await self._http.request(method, path, params=clean, json=json)
         except httpx.HTTPError as exc:  # network/DNS/timeout
             raise SpeedrunError(f"Network error talking to speedrun.com: {exc}") from exc
 
@@ -72,6 +108,16 @@ class SpeedrunClient:
             raise RateLimitError(
                 "speedrun.com rate limit hit (100 requests/minute). Wait a minute and retry."
             )
+
+        if resp.status_code in (401, 403):
+            detail = self._error_message(resp)
+            msg = (
+                f"speedrun.com rejected {method} {path} as unauthenticated "
+                f"(HTTP {resp.status_code}); it needs a valid API key."
+            )
+            if detail:
+                msg = f"{msg} speedrun.com says: {detail}"
+            raise AuthError(msg)
 
         if resp.status_code == 404:
             detail = self._error_message(resp)
@@ -87,12 +133,21 @@ class SpeedrunClient:
                 msg = f"{msg} speedrun.com says: {detail}"
             raise SpeedrunError(msg)
 
+        if not resp.content:  # some write endpoints can answer with an empty body
+            return None
         try:
             return resp.json()
         except ValueError as exc:  # non-JSON / empty success body
             raise SpeedrunError(
                 f"speedrun.com returned an unparseable response for {path}: {exc}"
             ) from exc
+
+    async def _send(self, method: str, path: str, *, json: Any | None = None) -> Any:
+        """Make a write request (POST/PUT/DELETE) and return the ``data`` payload."""
+        body = await self._request(path, method=method, json=json)
+        if isinstance(body, dict):
+            return body.get("data", body)
+        return body
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """GET a path and return the parsed ``data`` payload.
@@ -144,11 +199,17 @@ class SpeedrunClient:
             body = resp.json()
         except ValueError:
             return None
-        if isinstance(body, dict):
-            message = body.get("message")
-            if isinstance(message, str) and message.strip():
-                return message.strip()
-        return None
+        if not isinstance(body, dict):
+            return None
+        message = body.get("message")
+        message = message.strip() if isinstance(message, str) and message.strip() else None
+        # Run-submission failures attach a list of per-field reasons under
+        # ``errors`` (e.g. "[category] is missing and it is required").
+        errors = body.get("errors")
+        if isinstance(errors, list) and errors:
+            detail = "; ".join(str(e) for e in errors)
+            return f"{message} ({detail})" if message else detail
+        return message
 
     # -- games ----------------------------------------------------------------
 
@@ -228,3 +289,108 @@ class SpeedrunClient:
 
     async def get_regions(self) -> list[dict]:
         return await self._get_paginated("/regions")
+
+    # -- authenticated: identity ----------------------------------------------
+
+    async def get_profile(self) -> dict:
+        """The user that owns the API key (GET /profile). Requires auth."""
+        return await self._get("/profile")
+
+    async def get_notifications(self, *, direction: str = "desc") -> list[dict]:
+        """The authenticated user's notifications, newest first. Requires auth."""
+        return await self._get("/notifications", {"orderby": "created", "direction": direction})
+
+    # -- runs: moderation-queue read ------------------------------------------
+
+    async def get_runs(
+        self,
+        *,
+        status: str | None = None,
+        game: str | None = None,
+        category: str | None = None,
+        level: str | None = None,
+        examiner: str | None = None,
+        orderby: str | None = None,
+        direction: str | None = None,
+        maximum: int = 20,
+        embed: str | None = None,
+    ) -> list[dict]:
+        """List runs with filters (e.g. ``status='new'`` for the moderation queue).
+
+        A public read — no API key required.
+        """
+        return await self._get(
+            "/runs",
+            {
+                "status": status,
+                "game": game,
+                "category": category,
+                "level": level,
+                "examiner": examiner,
+                "orderby": orderby,
+                "direction": direction,
+                "max": maximum,
+                "embed": embed,
+            },
+        )
+
+    # -- runs: write / moderation (requires auth) -----------------------------
+
+    async def submit_run(
+        self,
+        *,
+        category: str,
+        platform: str,
+        times: dict[str, float],
+        level: str | None = None,
+        date: str | None = None,
+        region: str | None = None,
+        video: str | None = None,
+        comment: str | None = None,
+        splitsio: str | None = None,
+        emulated: bool | None = None,
+        variables: dict[str, dict[str, str]] | None = None,
+        players: list[dict[str, str]] | None = None,
+    ) -> dict:
+        """Submit a run (POST /runs). The body is wrapped in ``{"run": {...}}``.
+
+        ``times`` needs at least one of ``realtime`` / ``realtime_noloads`` /
+        ``ingame`` (seconds). ``variables`` is keyed by variable id with
+        ``{"type": "pre-defined"|"user-defined", "value": ...}`` values.
+        """
+        run: dict[str, Any] = {"category": category, "platform": platform, "times": times}
+        optional = {
+            "level": level,
+            "date": date,
+            "region": region,
+            "video": video,
+            "comment": comment,
+            "splitsio": splitsio,
+            "emulated": emulated,
+            "variables": variables,
+            "players": players,
+        }
+        run.update({k: v for k, v in optional.items() if v is not None})
+        return await self._send("POST", "/runs", json={"run": run})
+
+    async def set_run_status(self, run_id: str, status: str, *, reason: str | None = None) -> dict:
+        """Verify or reject a run (PUT /runs/{id}/status, moderator only).
+
+        Body is double-nested: ``{"status": {"status": ..., "reason": ...}}``.
+        A rejection requires a ``reason``.
+        """
+        inner: dict[str, Any] = {"status": status}
+        if reason is not None:
+            inner["reason"] = reason
+        return await self._send("PUT", f"/runs/{run_id}/status", json={"status": inner})
+
+    async def set_run_players(self, run_id: str, players: list[dict[str, str]]) -> dict:
+        """Replace a run's player list (PUT /runs/{id}/players, moderator only).
+
+        The list is a full replacement — include every player, not just additions.
+        """
+        return await self._send("PUT", f"/runs/{run_id}/players", json={"players": players})
+
+    async def delete_run(self, run_id: str) -> dict:
+        """Delete a run (DELETE /runs/{id}). Own runs, or any run for global mods."""
+        return await self._send("DELETE", f"/runs/{run_id}")
