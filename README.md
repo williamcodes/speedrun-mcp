@@ -91,21 +91,42 @@ claude mcp add speedrun \
 
 ## Authenticated features
 
-The read tools work with no setup. Two optional environment variables unlock more:
+**An API key is entirely optional.** With no key, the server exposes only the
+public read tools (leaderboards, games, players, the moderation queue) and works
+exactly as described above — no account required. Adding your key unlocks more:
 
-| Variable | Effect |
+| Set this env var | Effect |
 | --- | --- |
-| `SPEEDRUN_API_KEY` | Enables identity reads (`whoami`, `list_notifications`). Find your key at <https://www.speedrun.com/api/auth> (this is a copy-paste key, **not** OAuth). |
-| `SPEEDRUN_ENABLE_WRITES` | Set to `1`/`true` to additionally expose the **write** tools: `submit_run`, `verify_run`, `reject_run`, `set_run_players`, `delete_run`. Requires `SPEEDRUN_API_KEY`; moderation tools also require a moderator key. |
+| `SPEEDRUN_API_KEY` | Puts the server in **read-only authenticated mode**. Adds the identity reads — `whoami` (the profile your key belongs to) and `list_notifications`. The write tools (`submit_run`, `verify_run`, `reject_run`, `set_run_players`, `delete_run`) also become *visible*, but stay disabled — calling one returns a message telling you to enable writes. Until a key is set, none of these are advertised at all. |
+| `SPEEDRUN_ENABLE_WRITES=1` | Switches to **read-write mode**: arms the write tools so they actually submit/moderate. Requires `SPEEDRUN_API_KEY` (moderation also needs a moderator key). Off by default — submitting and rejecting/deleting are real, permanent actions on real leaderboards, so opt in deliberately. |
 
-Everything is opt-in: **with no key set, only the public read tools are
-exposed** — `whoami` / `list_notifications` aren't even advertised, and the write
-tools stay hidden behind their own flag. The key is read **only from the
+**Read-only is the default.** Just adding a key never changes anything on
+speedrun.com — you get identity reads, and everything keeps working perfectly. If
+a write tool is invoked while writes are off, it doesn't silently fail; it returns:
+
+> *This server is in read-only mode, so this write action is disabled. To allow
+> run submission and moderation, set the environment variable
+> SPEEDRUN_ENABLE_WRITES=1 (alongside SPEEDRUN_API_KEY) and restart the server.*
+
+So the way to switch to read-write mode is always discoverable from the error
+itself.
+
+### Getting your API key
+
+1. Log in to [speedrun.com](https://www.speedrun.com).
+2. Go to your account **settings**.
+3. In the left-hand nav, find the **Developers** section and click **API Key**.
+4. Copy the key shown there.
+
+Treat the key like a password — anyone who has it can act as you on
+speedrun.com. If it ever leaks, regenerate it from that same page.
+
+### Using your key
+
+Add the key to your MCP client config under `env`. It is read **only from the
 environment** — never passed as a tool argument — so it can't leak into the
-model's context or transcripts. A key configured just for identity reads can't
-arm submission or moderation (that needs the separate flag). Submitting and
-rejecting/deleting are real, outward actions against your account — enable writes
-deliberately.
+model's context or transcripts. Add `SPEEDRUN_ENABLE_WRITES=1` only when you want
+writes to actually run; with the key alone you stay safely read-only.
 
 ```json
 {
@@ -121,8 +142,16 @@ deliberately.
 }
 ```
 
-Tools are annotated with MCP read-only / destructive hints so clients can flag
-the write and moderation actions appropriately.
+Or with Claude Code:
+
+```bash
+claude mcp add speedrun -e SPEEDRUN_API_KEY=your-key-here -- speedrun-mcp
+# add -e SPEEDRUN_ENABLE_WRITES=1 as well if you want the write tools
+```
+
+Keep the key out of version control — put it in your client config or a local,
+git-ignored `.env`, never in a committed file. All tools carry MCP read-only /
+destructive hints so clients can flag the write and moderation actions.
 
 ## Notes & limits
 

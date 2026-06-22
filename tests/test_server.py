@@ -37,21 +37,33 @@ def test_annotations_mark_read_vs_write():
     assert write.destructiveHint is True
 
 
-async def test_tool_exposure_tracks_key_and_writes_flag():
+async def test_tool_exposure_tracks_api_key():
     names = {t.name for t in await s.mcp.list_tools()}
 
     # public reads are always exposed (no key needed)
     assert {"search_games", "get_leaderboard", "list_unverified_runs"} <= names
 
-    # identity tools appear only when an API key is configured
-    for name in ("whoami", "list_notifications"):
-        assert callable(getattr(s, name))  # always defined on the module
+    # every authenticated tool — identity reads AND the write tools — is exposed
+    # only when a key is configured (writes are still listed so they're
+    # discoverable; the flag controls whether they *run*, not whether they show).
+    # The functions are always defined on the module regardless.
+    authed = (
+        "whoami", "list_notifications",
+        "submit_run", "verify_run", "reject_run", "set_run_players", "delete_run",
+    )
+    for name in authed:
+        assert callable(getattr(s, name))
         assert (name in names) is s.AUTH_ENABLED
 
-    # write tools register only when writes are enabled (which also needs a key)
-    for name in ("submit_run", "verify_run", "reject_run", "set_run_players", "delete_run"):
-        assert callable(getattr(s, name))
-        assert (name in names) is s.WRITES_ENABLED
+
+async def test_write_tools_blocked_with_clear_message_when_read_only():
+    # A write call in read-only mode must fail with an actionable error naming
+    # SPEEDRUN_ENABLE_WRITES — and do so before needing a key or the network.
+    if s.WRITES_ENABLED:
+        pytest.skip("writes are enabled in this environment")
+    with pytest.raises(RuntimeError) as excinfo:
+        await s.submit_run(category="x", platform="y", realtime=1.0)
+    assert "SPEEDRUN_ENABLE_WRITES" in str(excinfo.value)
 
 
 async def test_whoami_requires_api_key(monkeypatch):
