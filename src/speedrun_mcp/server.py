@@ -9,6 +9,7 @@ Typical flow for a model:
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -363,12 +364,21 @@ async def get_series(
     include_games: Annotated[bool, Field(description="Also list the games in the series.")] = True,
     game_limit: Annotated[int, Field(ge=1, le=200, description="Max games to list.")] = 50,
 ) -> dict:
-    """Get a series' details and (by default) the games it contains."""
-    info = await _get_client().get_series(series)
+    """Get a series' details and (by default) the games it contains.
+
+    The returned game ids/abbreviations feed the other tools (``get_game``,
+    ``list_categories``, ``get_leaderboard``).
+    """
+    client = _get_client()
+    if not include_games:
+        return fmt.series_summary(await client.get_series(series))
+    # The two calls are independent — fetch them concurrently.
+    info, games = await asyncio.gather(
+        client.get_series(series),
+        client.get_series_games(series, maximum=game_limit),
+    )
     out = fmt.series_summary(info)
-    if include_games:
-        games = await _get_client().get_series_games(series, maximum=game_limit)
-        out["games"] = [fmt.game_summary(g) for g in games]
+    out["games"] = [fmt.game_summary(g) for g in games]
     return out
 
 
@@ -421,13 +431,16 @@ async def get_game_records(
     """Get a game's records across all its categories in one call.
 
     With ``top=1`` (default) this is every category's world record at once —
-    handy for "show me all the records for <game>".
+    handy for "show me all the records for <game>". ``include_levels=True`` also
+    pulls every individual-level board, which can be large for level-heavy games.
     """
     boards = await _get_client().get_game_records(
         game,
         top=top,
         scope="all" if include_levels else "full-game",
-        embed="game,category,players,variables,level",
+        # No "level" embed: leaderboard_view expects level as a plain id, and an
+        # embedded level object would be copied through verbatim as noise.
+        embed="game,category,players,variables",
     )
     return {
         "game": game,
