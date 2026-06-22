@@ -50,6 +50,16 @@ def game_summary(game: dict) -> dict:
     }
 
 
+def series_summary(series: dict) -> dict:
+    """Compact view of a series resource (a group of related games)."""
+    return {
+        "id": series.get("id"),
+        "name": _intl_name(series),
+        "abbreviation": series.get("abbreviation"),
+        "weblink": series.get("weblink"),
+    }
+
+
 def category_summary(cat: dict) -> dict:
     return {
         "id": cat.get("id"),
