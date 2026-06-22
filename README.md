@@ -44,7 +44,7 @@ With write tools enabled (see below), `submit_run`, `verify_run`, `reject_run`,
 Requires Python 3.10+.
 
 ```bash
-# from PyPI (once published)
+# from PyPI
 pipx install speedrun-mcp        # or: uv tool install speedrun-mcp
 
 # from source
