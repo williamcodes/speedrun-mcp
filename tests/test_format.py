@@ -153,3 +153,59 @@ def test_leaderboard_view_respects_limit():
     # returned_runs reflects the number of rows actually returned (bounded by the
     # limit/top + ties), NOT the full leaderboard size.
     assert view["returned_runs"] == 3
+
+
+def test_profile_summary_includes_role():
+    profile = {
+        "id": "u1",
+        "names": {"international": "Suigi"},
+        "weblink": "https://www.speedrun.com/user/Suigi",
+        "role": "user",
+        "location": {"country": {"names": {"international": "Japan"}}},
+        "signup": "2014-01-01T00:00:00Z",
+    }
+    out = fmt.profile_summary(profile)
+    assert out["id"] == "u1"
+    assert out["name"] == "Suigi"
+    assert out["role"] == "user"
+    assert out["country"] == "Japan"
+
+
+def test_notification_view_flattens_links_and_status():
+    notif = {
+        "id": "n1",
+        "status": "unread",
+        "created": "2015-01-25T11:55:15Z",
+        "text": "Foo verified your run.",
+        "item": {"rel": "run", "uri": "https://x"},
+        "links": [
+            {"rel": "run", "uri": "https://www.speedrun.com/api/v1/runs/r1"},
+            {"rel": "game", "uri": "https://www.speedrun.com/api/v1/games/g1"},
+        ],
+    }
+    out = fmt.notification_view(notif)
+    assert out["status"] == "unread"
+    assert out["type"] == "run"
+    assert out["run"].endswith("/runs/r1")
+    assert out["game"].endswith("/games/g1")
+
+
+def test_submission_result_is_compact_and_drops_empties():
+    run = {
+        "id": "r1",
+        "weblink": "https://www.speedrun.com/run/r1",
+        "status": {"status": "rejected", "reason": "fake", "examiner": "m1"},
+        "players": [{"rel": "user", "id": "u1"}],
+        "game": "g1",
+        "category": "c1",
+        "times": {"primary_t": 92.5},
+        "date": "2023-01-01",
+        # no "submitted" -> the key should be dropped from the result
+    }
+    out = fmt.submission_result(run, name_map={"u1": "Suigi"})
+    assert out["run_id"] == "r1"
+    assert out["status"] == "rejected"
+    assert out["reason"] == "fake"
+    assert out["players"] == ["Suigi"]
+    assert out["time"] == "1m 32.5s"
+    assert "submitted" not in out

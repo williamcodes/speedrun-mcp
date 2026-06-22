@@ -5,6 +5,7 @@ These are deliberately lenient about exact values (records change) and assert on
 structure and well-known invariants instead.
 """
 
+import os
 import re
 
 import pytest
@@ -15,6 +16,13 @@ from speedrun_mcp.client import SpeedrunError
 pytestmark = pytest.mark.network
 
 SM64 = "o1y9wo6q"  # Super Mario 64
+
+# Authenticated live tests only run when a real key is present. They are still
+# under the `network` marker, so `pytest -m "not network"` skips them too.
+requires_api_key = pytest.mark.skipif(
+    not os.environ.get("SPEEDRUN_API_KEY"),
+    reason="set SPEEDRUN_API_KEY to run authenticated live tests",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -133,3 +141,25 @@ async def test_list_platforms_paginates_beyond_one_page():
     names = {p["name"] for p in platforms}
     # these sort after the first 200 (V/W/X) — missing before pagination was added.
     assert {"Wii", "Xbox"}.issubset(names)
+
+
+async def test_list_unverified_runs_is_public():
+    # The moderation-queue read needs no API key; it should return run summaries
+    # (or an empty list if the queue happens to be clear).
+    runs = await s.list_unverified_runs("sm64", limit=5)
+    assert isinstance(runs, list)
+    for r in runs:
+        assert "run_id" in r
+
+
+@requires_api_key
+async def test_whoami_returns_the_keys_profile():
+    me = await s.whoami()
+    assert me["id"]
+    assert me["name"]
+
+
+@requires_api_key
+async def test_list_notifications_returns_list():
+    notes = await s.list_notifications(limit=5)
+    assert isinstance(notes, list)
