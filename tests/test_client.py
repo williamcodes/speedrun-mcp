@@ -131,6 +131,43 @@ async def test_verify_status_omits_reason():
     assert seen["body"] == {"status": {"status": "verified"}}  # no reason key
 
 
+async def test_get_game_records_path_and_params():
+    seen = {}
+
+    def handler(request):
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["query"] = dict(request.url.params)
+        return httpx.Response(200, json={"data": []})
+
+    async with SpeedrunClient(transport=_transport(handler)) as c:
+        await c.get_game_records("sm64", top=1, scope="full-game", embed="game,category")
+
+    assert seen["method"] == "GET"
+    assert seen["path"].endswith("/games/sm64/records")
+    assert seen["query"]["top"] == "1"
+    assert seen["query"]["scope"] == "full-game"
+    # None-valued params (miscellaneous) must be dropped, not sent as "None"
+    assert "miscellaneous" not in seen["query"]
+
+
+async def test_list_runs_passes_user_filter():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["query"] = dict(request.url.params)
+        return httpx.Response(200, json={"data": []})
+
+    async with SpeedrunClient(transport=_transport(handler)) as c:
+        await c.get_runs(user="u123", status="verified", maximum=5)
+
+    assert seen["path"].endswith("/runs")
+    assert seen["query"]["user"] == "u123"
+    assert seen["query"]["status"] == "verified"
+    assert seen["query"]["max"] == "5"
+
+
 async def test_delete_run_uses_delete_method():
     seen = {}
 

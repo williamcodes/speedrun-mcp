@@ -155,6 +155,21 @@ def test_leaderboard_view_respects_limit():
     assert view["returned_runs"] == 3
 
 
+def test_series_summary_compact():
+    series = {
+        "id": "s1",
+        "names": {"international": "Super Mario"},
+        "abbreviation": "smario",
+        "weblink": "https://www.speedrun.com/smario",
+    }
+    assert fmt.series_summary(series) == {
+        "id": "s1",
+        "name": "Super Mario",
+        "abbreviation": "smario",
+        "weblink": "https://www.speedrun.com/smario",
+    }
+
+
 def test_profile_summary_includes_role():
     profile = {
         "id": "u1",
