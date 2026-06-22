@@ -70,20 +70,35 @@ def _require_auth() -> SpeedrunClient:
     return client
 
 
+def _require_writes() -> None:
+    """Guard write tools: raise a clear, actionable error when writes are off.
+
+    This is what makes read-only mode discoverable — calling a write tool without
+    ``SPEEDRUN_ENABLE_WRITES`` set explains exactly how to switch to read-write.
+    """
+    if not WRITES_ENABLED:
+        raise RuntimeError(
+            "This server is in read-only mode, so this write action is disabled. "
+            "To allow run submission and moderation, set the environment variable "
+            "SPEEDRUN_ENABLE_WRITES=1 (alongside SPEEDRUN_API_KEY) and restart the "
+            "server."
+        )
+
+
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-# Whether an API key is configured. The identity tools (whoami,
-# list_notifications) are exposed only when it is, so a keyless user sees just
-# the public read tools — the key, and its features, are entirely opt-in.
+# Whether an API key is configured. All authenticated tools — identity reads
+# AND the write tools — are exposed only when a key is present, so a keyless
+# user sees just the public read tools. The key is entirely opt-in.
 AUTH_ENABLED = bool(os.environ.get("SPEEDRUN_API_KEY"))
 
-# Run submission and moderation are exposed only when writes are explicitly
-# enabled *and* a key is present (they can't work without one). So a key set
-# just for whoami/notifications can't also arm submission or moderation.
-# Read at import: the MCP client sets env before launching the server.
-WRITES_ENABLED = AUTH_ENABLED and _truthy(os.environ.get("SPEEDRUN_ENABLE_WRITES"))
+# Whether writes are *armed*. A key alone gives read-only behaviour: the write
+# tools are still listed (so they're discoverable and the model can learn how to
+# enable them), but each refuses to run until this flag is set. Read at import:
+# the MCP client sets env before launching the server.
+WRITES_ENABLED = _truthy(os.environ.get("SPEEDRUN_ENABLE_WRITES"))
 
 
 def _read_anno(title: str) -> ToolAnnotations:
@@ -105,25 +120,14 @@ def _write_anno(
 def _auth_tool(**kwargs):
     """Like ``@mcp.tool`` but only registers when an API key is configured.
 
-    Keeps key-only tools off the menu for keyless users; the function is still
-    defined on the module either way.
+    Used for every authenticated tool (identity reads and the write tools), so
+    keyless users see only the public reads. Write tools add ``_require_writes``
+    on top to stay read-only until writes are armed; the function is defined on
+    the module either way.
     """
 
     def decorator(fn):
         return mcp.tool(**kwargs)(fn) if AUTH_ENABLED else fn
-
-    return decorator
-
-
-def _write_tool(**kwargs):
-    """Like ``@mcp.tool`` but only registers the tool when writes are enabled.
-
-    When disabled the function is returned undecorated (defined but not exposed),
-    so a read-only deployment never advertises a write tool at all.
-    """
-
-    def decorator(fn):
-        return mcp.tool(**kwargs)(fn) if WRITES_ENABLED else fn
 
     return decorator
 
@@ -389,10 +393,13 @@ async def list_unverified_runs(
     return [fmt.submission_result(r) for r in runs]
 
 
-# -- authenticated: run submission & moderation (gated by SPEEDRUN_ENABLE_WRITES)
+# -- authenticated: run submission & moderation -------------------------------
+# Listed whenever a key is set, but each refuses to run (with a clear message)
+# unless SPEEDRUN_ENABLE_WRITES is set — so read-only is the default and the way
+# to enable writes is discoverable.
 
 
-@_write_tool(annotations=_write_anno("Submit a run"))
+@_auth_tool(annotations=_write_anno("Submit a run"))
 async def submit_run(
     category: Annotated[str, Field(description="Category id (from list_categories).")],
     platform: Annotated[str, Field(description="Platform id (from list_platforms).")],
@@ -418,10 +425,12 @@ async def submit_run(
 ) -> dict:
     """Submit a run to a leaderboard under your account (enters the mod queue).
 
-    Provide at least one timing (``realtime`` / ``ingame`` / ``realtime_noloads``)
-    in seconds. Resolve ``category`` / ``platform`` / ``variables`` ids with
-    list_categories / list_platforms / list_variables first.
+    Needs write mode (set SPEEDRUN_ENABLE_WRITES=1). Provide at least one timing
+    (``realtime`` / ``ingame`` / ``realtime_noloads``) in seconds. Resolve
+    ``category`` / ``platform`` / ``variables`` ids with list_categories /
+    list_platforms / list_variables first.
     """
+    _require_writes()
     times: dict[str, float] = {}
     if realtime is not None:
         times["realtime"] = realtime
@@ -455,26 +464,28 @@ async def submit_run(
     return fmt.submission_result(run)
 
 
-@_write_tool(annotations=_write_anno("Verify a run", idempotent=True))
+@_auth_tool(annotations=_write_anno("Verify a run", idempotent=True))
 async def verify_run(
     run_id: Annotated[str, Field(description="The run id to verify.")],
 ) -> dict:
-    """Mark a run as verified. Moderator only — requires a moderator API key."""
+    """Mark a run as verified. Moderator only; needs write mode (SPEEDRUN_ENABLE_WRITES=1)."""
+    _require_writes()
     run = await _require_auth().set_run_status(run_id, "verified")
     return fmt.submission_result(run)
 
 
-@_write_tool(annotations=_write_anno("Reject a run", destructive=True))
+@_auth_tool(annotations=_write_anno("Reject a run", destructive=True))
 async def reject_run(
     run_id: Annotated[str, Field(description="The run id to reject.")],
     reason: Annotated[str, Field(description="Why the run is rejected (required).")],
 ) -> dict:
-    """Reject a run with a reason. Moderator only — requires a moderator API key."""
+    """Reject a run with a reason. Moderator only; needs write mode (SPEEDRUN_ENABLE_WRITES=1)."""
+    _require_writes()
     run = await _require_auth().set_run_status(run_id, "rejected", reason=reason)
     return fmt.submission_result(run)
 
 
-@_write_tool(annotations=_write_anno("Set run players", destructive=True))
+@_auth_tool(annotations=_write_anno("Set run players", destructive=True))
 async def set_run_players(
     run_id: Annotated[str, Field(description="The run id whose players to set.")],
     user_ids: Annotated[
@@ -484,11 +495,12 @@ async def set_run_players(
         list[str] | None, Field(description="Guest player names (no account).")
     ] = None,
 ) -> dict:
-    """Replace a run's player list. Moderator only.
+    """Replace a run's player list. Moderator only; needs write mode (SPEEDRUN_ENABLE_WRITES=1).
 
     The new list *replaces* the existing one entirely — pass every player, not
     just additions.
     """
+    _require_writes()
     players: list[dict[str, str]] = [{"rel": "user", "id": u} for u in (user_ids or [])]
     players += [{"rel": "guest", "name": g} for g in (guests or [])]
     if not players:
@@ -497,11 +509,12 @@ async def set_run_players(
     return fmt.submission_result(run)
 
 
-@_write_tool(annotations=_write_anno("Delete a run", destructive=True))
+@_auth_tool(annotations=_write_anno("Delete a run", destructive=True))
 async def delete_run(
     run_id: Annotated[str, Field(description="The run id to delete.")],
 ) -> dict:
-    """Delete a run — your own, or any run for global moderators. Irreversible."""
+    """Delete a run — your own, or any for global mods. Needs write mode (SPEEDRUN_ENABLE_WRITES=1). Irreversible."""
+    _require_writes()
     run = await _require_auth().delete_run(run_id)
     return fmt.submission_result(run)
 
