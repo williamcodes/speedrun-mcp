@@ -231,6 +231,25 @@ class SpeedrunClient:
     async def get_category_variables(self, category: str) -> list[dict]:
         return await self._get(f"/categories/{category}/variables")
 
+    async def get_game_records(
+        self,
+        game: str,
+        *,
+        top: int = 1,
+        scope: str | None = None,
+        miscellaneous: bool | None = None,
+        embed: str | None = None,
+    ) -> list[dict]:
+        """A game's leaderboards in one call (GET /games/{id}/records).
+
+        ``top`` caps places per board (1 = world records only). ``scope`` is
+        ``full-game`` / ``levels`` / ``all``.
+        """
+        return await self._get(
+            f"/games/{game}/records",
+            {"top": top, "scope": scope, "miscellaneous": miscellaneous, "embed": embed},
+        )
+
     # -- leaderboards ---------------------------------------------------------
 
     async def get_leaderboard(
@@ -290,6 +309,17 @@ class SpeedrunClient:
     async def get_regions(self) -> list[dict]:
         return await self._get_paginated("/regions")
 
+    # -- series ---------------------------------------------------------------
+
+    async def search_series(self, name: str, *, maximum: int = 10) -> list[dict]:
+        return await self._get("/series", {"name": name, "max": maximum})
+
+    async def get_series(self, series: str) -> dict:
+        return await self._get(f"/series/{series}")
+
+    async def get_series_games(self, series: str, *, maximum: int = 50) -> list[dict]:
+        return await self._get(f"/series/{series}/games", {"max": maximum})
+
     # -- authenticated: identity ----------------------------------------------
 
     async def get_profile(self) -> dict:
@@ -305,6 +335,8 @@ class SpeedrunClient:
     async def get_runs(
         self,
         *,
+        user: str | None = None,
+        guest: str | None = None,
         status: str | None = None,
         game: str | None = None,
         category: str | None = None,
@@ -315,13 +347,16 @@ class SpeedrunClient:
         maximum: int = 20,
         embed: str | None = None,
     ) -> list[dict]:
-        """List runs with filters (e.g. ``status='new'`` for the moderation queue).
+        """List runs with filters (e.g. ``status='new'`` for the moderation queue,
+        or ``user=...`` for a player's submissions).
 
         A public read — no API key required.
         """
         return await self._get(
             "/runs",
             {
+                "user": user,
+                "guest": guest,
                 "status": status,
                 "game": game,
                 "category": category,

@@ -343,6 +343,99 @@ async def list_regions() -> list[dict]:
     return [{"id": r.get("id"), "name": r.get("name")} for r in regions]
 
 
+@mcp.tool(annotations=_read_anno("Search series"))
+async def search_series(
+    name: Annotated[str, Field(description="Series title or partial title to search for.")],
+    limit: Annotated[int, Field(ge=1, le=50, description="Max series to return.")] = 10,
+) -> list[dict]:
+    """Fuzzy-search game series (e.g. 'Mario', 'Zelda') by name.
+
+    A series groups related games; pass a returned id to ``get_series`` to list
+    the games it contains.
+    """
+    series = await _get_client().search_series(name, maximum=limit)
+    return [fmt.series_summary(s) for s in series]
+
+
+@mcp.tool(annotations=_read_anno("Get series"))
+async def get_series(
+    series: Annotated[str, Field(description="Series id or abbreviation.")],
+    include_games: Annotated[bool, Field(description="Also list the games in the series.")] = True,
+    game_limit: Annotated[int, Field(ge=1, le=200, description="Max games to list.")] = 50,
+) -> dict:
+    """Get a series' details and (by default) the games it contains."""
+    info = await _get_client().get_series(series)
+    out = fmt.series_summary(info)
+    if include_games:
+        games = await _get_client().get_series_games(series, maximum=game_limit)
+        out["games"] = [fmt.game_summary(g) for g in games]
+    return out
+
+
+@mcp.tool(annotations=_read_anno("List runs"))
+async def list_runs(
+    user: Annotated[
+        str | None, Field(description="Filter to a player's runs (user id or username).")
+    ] = None,
+    game: Annotated[
+        str | None, Field(description="Filter to a game (id or abbreviation).")
+    ] = None,
+    category: Annotated[str | None, Field(description="Filter to a category id.")] = None,
+    status: Annotated[
+        str | None, Field(description="Filter by status: 'new', 'verified', or 'rejected'.")
+    ] = None,
+    examiner: Annotated[
+        str | None, Field(description="Filter to runs examined by this user id.")
+    ] = None,
+    limit: Annotated[int, Field(ge=1, le=200, description="Max runs to return.")] = 20,
+) -> list[dict]:
+    """List runs with filters — e.g. a player's recent submissions, or a game's
+    verified/rejected runs. Newest first; combine filters to narrow down.
+
+    For just one game's moderation queue, ``list_unverified_runs`` is simpler.
+    """
+    runs = await _get_client().get_runs(
+        user=user,
+        game=game,
+        category=category,
+        status=status,
+        examiner=examiner,
+        orderby="submitted",
+        direction="desc",
+        maximum=limit,
+        embed="players",
+    )
+    return [fmt.submission_result(r) for r in runs]
+
+
+@mcp.tool(annotations=_read_anno("Get game records"))
+async def get_game_records(
+    game: Annotated[str, Field(description="Game id or abbreviation.")],
+    top: Annotated[
+        int, Field(ge=1, le=10, description="Places per category (1 = world records).")
+    ] = 1,
+    include_levels: Annotated[
+        bool, Field(description="Include individual-level boards as well as full-game.")
+    ] = False,
+) -> dict:
+    """Get a game's records across all its categories in one call.
+
+    With ``top=1`` (default) this is every category's world record at once —
+    handy for "show me all the records for <game>".
+    """
+    boards = await _get_client().get_game_records(
+        game,
+        top=top,
+        scope="all" if include_levels else "full-game",
+        embed="game,category,players,variables,level",
+    )
+    return {
+        "game": game,
+        "returned_boards": len(boards),
+        "records": [fmt.leaderboard_view(b) for b in boards],
+    }
+
+
 # -- authenticated: identity (always on; need SPEEDRUN_API_KEY) ----------------
 
 
