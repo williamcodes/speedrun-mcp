@@ -250,3 +250,51 @@ def user_summary(user: dict) -> dict:
         "signup": user.get("signup"),
         "weblink": user.get("weblink"),
     }
+
+
+def profile_summary(profile: dict) -> dict:
+    """The authenticated user (GET /profile): a user summary plus their role."""
+    out = user_summary(profile)
+    out["role"] = profile.get("role")
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def notification_view(notif: dict) -> dict:
+    """One notification flattened to text + read status + any linked run/game."""
+    links = {ln.get("rel"): ln.get("uri") for ln in (notif.get("links") or [])}
+    item = notif.get("item") or {}
+    out = {
+        "id": notif.get("id"),
+        "status": notif.get("status"),  # "read" | "unread"
+        "created": notif.get("created"),
+        "text": notif.get("text"),
+        "type": item.get("rel"),  # post | run | game | guide
+        "run": links.get("run"),
+        "game": links.get("game"),
+    }
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def submission_result(run: dict, *, name_map: dict[str, str] | None = None) -> dict:
+    """Compact view of a run returned by submit/verify/reject/delete or the queue.
+
+    The submit/moderation responses use the *read* run shape, so the time comes
+    from ``times.primary_t`` and players may be id-references (resolved via
+    ``name_map`` when an embed was requested).
+    """
+    status = run.get("status") or {}
+    times = run.get("times") or {}
+    out: dict[str, Any] = {
+        "run_id": run.get("id"),
+        "weblink": run.get("weblink"),
+        "status": status.get("status"),  # new | verified | rejected
+        "examiner": status.get("examiner"),
+        "reason": status.get("reason"),  # set on rejection
+        "players": _resolve_players(run, name_map or {}),
+        "game": run.get("game"),
+        "category": run.get("category"),
+        "time": format_duration(times.get("primary_t")),
+        "date": run.get("date"),
+        "submitted": run.get("submitted"),
+    }
+    return {k: v for k, v in out.items() if v not in (None, [], "")}
