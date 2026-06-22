@@ -13,6 +13,11 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
+# Secrets / local env (never commit your speedrun.com API key)
+.env
+.env.*
+.speedrun-mcp-key
+
 # Editors / OS
 .DS_Store
 .idea/
