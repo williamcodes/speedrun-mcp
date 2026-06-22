@@ -25,9 +25,13 @@ subcategory variables labeled).
 | `list_platforms` / `list_regions` | Platform / region ids for the `platform`/`region` leaderboard filters |
 | `get_leaderboard` | A ranked leaderboard (top N; filter by variable / platform / region / timing) |
 | `get_world_record` | The current #1 run for a game/category, plus any runs tied for first |
+| `get_game_records` | Every category's records for a game in one call (defaults to world records) |
+| `search_series` | Fuzzy-search game series (e.g. `Mario`, `Zelda`) |
+| `get_series` | A series' details and the games it contains |
 | `search_users` | Find players by username (partial, fuzzy match) |
 | `get_user_personal_bests` | A player's PBs across all games |
 | `get_run` | Details of a single run |
+| `list_runs` | Runs filtered by player / game / category / status / examiner |
 | `list_unverified_runs` | A game's runs awaiting verification (the moderation queue) |
 | `whoami` | The profile that owns your API key *(only shown when a key is set)* |
 | `list_notifications` | Your speedrun.com notifications *(only shown when a key is set)* |
