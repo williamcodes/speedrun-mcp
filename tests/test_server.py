@@ -37,14 +37,18 @@ def test_annotations_mark_read_vs_write():
     assert write.destructiveHint is True
 
 
-async def test_read_tools_exposed_writes_gated():
+async def test_tool_exposure_tracks_key_and_writes_flag():
     names = {t.name for t in await s.mcp.list_tools()}
 
-    # identity reads and the moderation-queue read are always exposed
-    assert {"whoami", "list_notifications", "list_unverified_runs"} <= names
+    # public reads are always exposed (no key needed)
+    assert {"search_games", "get_leaderboard", "list_unverified_runs"} <= names
 
-    # write tools are registered only when SPEEDRUN_ENABLE_WRITES is set; the
-    # functions are always *defined* on the module regardless.
+    # identity tools appear only when an API key is configured
+    for name in ("whoami", "list_notifications"):
+        assert callable(getattr(s, name))  # always defined on the module
+        assert (name in names) is s.AUTH_ENABLED
+
+    # write tools register only when writes are enabled (which also needs a key)
     for name in ("submit_run", "verify_run", "reject_run", "set_run_players", "delete_run"):
         assert callable(getattr(s, name))
         assert (name in names) is s.WRITES_ENABLED

@@ -74,10 +74,16 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-# Run submission and moderation are only exposed when explicitly enabled, so a
-# key configured just for whoami/notifications can't also arm leaderboard
-# submission or moderation. Read at import: the client sets env before launch.
-WRITES_ENABLED = _truthy(os.environ.get("SPEEDRUN_ENABLE_WRITES"))
+# Whether an API key is configured. The identity tools (whoami,
+# list_notifications) are exposed only when it is, so a keyless user sees just
+# the public read tools — the key, and its features, are entirely opt-in.
+AUTH_ENABLED = bool(os.environ.get("SPEEDRUN_API_KEY"))
+
+# Run submission and moderation are exposed only when writes are explicitly
+# enabled *and* a key is present (they can't work without one). So a key set
+# just for whoami/notifications can't also arm submission or moderation.
+# Read at import: the MCP client sets env before launching the server.
+WRITES_ENABLED = AUTH_ENABLED and _truthy(os.environ.get("SPEEDRUN_ENABLE_WRITES"))
 
 
 def _read_anno(title: str) -> ToolAnnotations:
@@ -94,6 +100,19 @@ def _write_anno(
         idempotentHint=idempotent,
         openWorldHint=True,
     )
+
+
+def _auth_tool(**kwargs):
+    """Like ``@mcp.tool`` but only registers when an API key is configured.
+
+    Keeps key-only tools off the menu for keyless users; the function is still
+    defined on the module either way.
+    """
+
+    def decorator(fn):
+        return mcp.tool(**kwargs)(fn) if AUTH_ENABLED else fn
+
+    return decorator
 
 
 def _write_tool(**kwargs):
@@ -323,7 +342,7 @@ async def list_regions() -> list[dict]:
 # -- authenticated: identity (always on; need SPEEDRUN_API_KEY) ----------------
 
 
-@mcp.tool(annotations=_read_anno("Who am I"))
+@_auth_tool(annotations=_read_anno("Who am I"))
 async def whoami() -> dict:
     """Return the speedrun.com profile that owns the configured API key.
 
@@ -334,7 +353,7 @@ async def whoami() -> dict:
     return fmt.profile_summary(profile)
 
 
-@mcp.tool(annotations=_read_anno("List notifications"))
+@_auth_tool(annotations=_read_anno("List notifications"))
 async def list_notifications(
     limit: Annotated[int, Field(ge=1, le=100, description="Max notifications to return.")] = 20,
     unread_only: Annotated[bool, Field(description="Only return unread notifications.")] = False,
