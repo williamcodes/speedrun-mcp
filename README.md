@@ -29,8 +29,8 @@ subcategory variables labeled).
 | `get_user_personal_bests` | A player's PBs across all games |
 | `get_run` | Details of a single run |
 | `list_unverified_runs` | A game's runs awaiting verification (the moderation queue) |
-| `whoami` | The profile that owns your API key *(needs a key)* |
-| `list_notifications` | Your speedrun.com notifications *(needs a key)* |
+| `whoami` | The profile that owns your API key *(only shown when a key is set)* |
+| `list_notifications` | Your speedrun.com notifications *(only shown when a key is set)* |
 
 A typical flow: `search_games` → `list_categories` (and `list_variables` for
 subcategories) → `get_leaderboard` / `get_world_record`. Use `list_platforms` /
@@ -98,12 +98,14 @@ The read tools work with no setup. Two optional environment variables unlock mor
 | `SPEEDRUN_API_KEY` | Enables identity reads (`whoami`, `list_notifications`). Find your key at <https://www.speedrun.com/api/auth> (this is a copy-paste key, **not** OAuth). |
 | `SPEEDRUN_ENABLE_WRITES` | Set to `1`/`true` to additionally expose the **write** tools: `submit_run`, `verify_run`, `reject_run`, `set_run_players`, `delete_run`. Requires `SPEEDRUN_API_KEY`; moderation tools also require a moderator key. |
 
-The key is read **only from the environment** — never passed as a tool argument —
-so it can't leak into the model's context or transcripts. Write tools are gated
-behind their own flag so a key configured just for identity reads can't also arm
-run submission or moderation; when the flag is unset, those tools aren't even
-advertised to the client. Submitting and rejecting/deleting are real, outward
-actions against your account — enable writes deliberately.
+Everything is opt-in: **with no key set, only the public read tools are
+exposed** — `whoami` / `list_notifications` aren't even advertised, and the write
+tools stay hidden behind their own flag. The key is read **only from the
+environment** — never passed as a tool argument — so it can't leak into the
+model's context or transcripts. A key configured just for identity reads can't
+arm submission or moderation (that needs the separate flag). Submitting and
+rejecting/deleting are real, outward actions against your account — enable writes
+deliberately.
 
 ```json
 {
