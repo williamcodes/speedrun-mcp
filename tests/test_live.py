@@ -152,6 +152,34 @@ async def test_list_unverified_runs_is_public():
         assert "run_id" in r
 
 
+async def test_search_series_finds_results():
+    series = await s.search_series("Mario", limit=10)
+    assert series, "expected at least one series matching 'Mario'"
+    assert all("id" in x for x in series)
+
+
+async def test_get_series_lists_its_games():
+    matches = await s.search_series("Super Mario", limit=1)
+    assert matches, "expected a 'Super Mario' series"
+    detail = await s.get_series(matches[0]["id"])
+    assert detail["id"] == matches[0]["id"]
+    assert isinstance(detail.get("games"), list)
+
+
+async def test_list_runs_filters_by_game_and_status():
+    runs = await s.list_runs(game=SM64, status="verified", limit=5)
+    assert runs, "sm64 should have verified runs"
+    assert all(r.get("status") == "verified" for r in runs)
+
+
+async def test_get_game_records_returns_world_records():
+    recs = await s.get_game_records("sm64", top=1)
+    assert recs["game"] == "sm64"
+    assert recs["records"], "expected at least one category board"
+    # with top=1, at least one board should carry a world-record run
+    assert any(b.get("runs") for b in recs["records"])
+
+
 @requires_api_key
 async def test_whoami_returns_the_keys_profile():
     me = await s.whoami()

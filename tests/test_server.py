@@ -41,7 +41,10 @@ async def test_tool_exposure_tracks_api_key():
     names = {t.name for t in await s.mcp.list_tools()}
 
     # public reads are always exposed (no key needed)
-    assert {"search_games", "get_leaderboard", "list_unverified_runs"} <= names
+    assert {
+        "search_games", "get_leaderboard", "list_unverified_runs",
+        "search_series", "get_series", "list_runs", "get_game_records",
+    } <= names
 
     # every authenticated tool — identity reads AND the write tools — is exposed
     # only when a key is configured (writes are still listed so they're
