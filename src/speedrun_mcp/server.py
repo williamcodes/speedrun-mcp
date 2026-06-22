@@ -9,11 +9,13 @@ Typical flow for a model:
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from . import format as fmt
@@ -51,11 +53,63 @@ _client: SpeedrunClient | None = None
 def _get_client() -> SpeedrunClient:
     global _client
     if _client is None:
-        _client = SpeedrunClient()
+        # The API key (if any) comes only from the environment — never from a
+        # tool argument, so it can't leak into the model's context or logs.
+        _client = SpeedrunClient(api_key=os.environ.get("SPEEDRUN_API_KEY") or None)
     return _client
 
 
-@mcp.tool()
+def _require_auth() -> SpeedrunClient:
+    """Return the client, or raise a clear error if no API key is configured."""
+    client = _get_client()
+    if not client.authenticated:
+        raise RuntimeError(
+            "This tool needs a speedrun.com API key. Set the SPEEDRUN_API_KEY "
+            "environment variable (get your key at https://www.speedrun.com/api/auth)."
+        )
+    return client
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Run submission and moderation are only exposed when explicitly enabled, so a
+# key configured just for whoami/notifications can't also arm leaderboard
+# submission or moderation. Read at import: the client sets env before launch.
+WRITES_ENABLED = _truthy(os.environ.get("SPEEDRUN_ENABLE_WRITES"))
+
+
+def _read_anno(title: str) -> ToolAnnotations:
+    return ToolAnnotations(title=title, readOnlyHint=True, openWorldHint=True)
+
+
+def _write_anno(
+    title: str, *, destructive: bool = False, idempotent: bool = False
+) -> ToolAnnotations:
+    return ToolAnnotations(
+        title=title,
+        readOnlyHint=False,
+        destructiveHint=destructive,
+        idempotentHint=idempotent,
+        openWorldHint=True,
+    )
+
+
+def _write_tool(**kwargs):
+    """Like ``@mcp.tool`` but only registers the tool when writes are enabled.
+
+    When disabled the function is returned undecorated (defined but not exposed),
+    so a read-only deployment never advertises a write tool at all.
+    """
+
+    def decorator(fn):
+        return mcp.tool(**kwargs)(fn) if WRITES_ENABLED else fn
+
+    return decorator
+
+
+@mcp.tool(annotations=_read_anno("Search games"))
 async def search_games(
     name: Annotated[str, Field(description="Game title or partial title to search for.")],
     limit: Annotated[int, Field(ge=1, le=50, description="Max games to return.")] = 10,
@@ -68,7 +122,7 @@ async def search_games(
     return [fmt.game_summary(g) for g in games]
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("Get game"))
 async def get_game(
     game: Annotated[str, Field(description="Game id or abbreviation (e.g. 'sm64' or 'o1y9wo6q').")],
     include_levels: Annotated[
@@ -94,7 +148,7 @@ async def get_game(
     return out
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("List categories"))
 async def list_categories(
     game: Annotated[str, Field(description="Game id or abbreviation.")],
 ) -> list[dict]:
@@ -103,7 +157,7 @@ async def list_categories(
     return [fmt.category_summary(c) for c in cats]
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("List variables"))
 async def list_variables(
     game: Annotated[str, Field(description="Game id or abbreviation.")],
 ) -> list[dict]:
@@ -117,7 +171,7 @@ async def list_variables(
     return [fmt.variable_summary(v) for v in variables]
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("Get leaderboard"))
 async def get_leaderboard(
     game: Annotated[str, Field(description="Game id or abbreviation.")],
     category: Annotated[str, Field(description="Category id or abbreviation.")],
@@ -163,7 +217,7 @@ async def get_leaderboard(
     return fmt.leaderboard_view(lb)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("Get world record"))
 async def get_world_record(
     game: Annotated[str, Field(description="Game id or abbreviation.")],
     category: Annotated[str, Field(description="Category id or abbreviation.")],
@@ -195,7 +249,7 @@ async def get_world_record(
     return view
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("Search users"))
 async def search_users(
     name: Annotated[str, Field(description="Username (or partial) to look up.")],
     limit: Annotated[int, Field(ge=1, le=50, description="Max users to return.")] = 10,
@@ -205,7 +259,7 @@ async def search_users(
     return [fmt.user_summary(u) for u in users]
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("Get personal bests"))
 async def get_user_personal_bests(
     user: Annotated[str, Field(description="User id or exact username.")],
     limit: Annotated[int, Field(ge=1, le=200, description="Max personal bests to return.")] = 25,
@@ -234,7 +288,7 @@ async def get_user_personal_bests(
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("Get run"))
 async def get_run(
     run_id: Annotated[str, Field(description="The run's id.")],
 ) -> dict:
@@ -244,7 +298,7 @@ async def get_run(
     return fmt.run_entry(run, name_map=name_map)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("List platforms"))
 async def list_platforms() -> list[dict]:
     """List speedrun.com platforms (consoles/systems) with their ids and names.
 
@@ -255,7 +309,7 @@ async def list_platforms() -> list[dict]:
     return [{"id": p.get("id"), "name": p.get("name")} for p in platforms]
 
 
-@mcp.tool()
+@mcp.tool(annotations=_read_anno("List regions"))
 async def list_regions() -> list[dict]:
     """List speedrun.com regions (e.g. USA/NTSC, EUR/PAL) with their ids and names.
 
@@ -264,6 +318,173 @@ async def list_regions() -> list[dict]:
     """
     regions = await _get_client().get_regions()
     return [{"id": r.get("id"), "name": r.get("name")} for r in regions]
+
+
+# -- authenticated: identity (always on; need SPEEDRUN_API_KEY) ----------------
+
+
+@mcp.tool(annotations=_read_anno("Who am I"))
+async def whoami() -> dict:
+    """Return the speedrun.com profile that owns the configured API key.
+
+    Requires the ``SPEEDRUN_API_KEY`` environment variable. Handy to confirm
+    which account a key belongs to before submitting or moderating runs.
+    """
+    profile = await _require_auth().get_profile()
+    return fmt.profile_summary(profile)
+
+
+@mcp.tool(annotations=_read_anno("List notifications"))
+async def list_notifications(
+    limit: Annotated[int, Field(ge=1, le=100, description="Max notifications to return.")] = 20,
+    unread_only: Annotated[bool, Field(description="Only return unread notifications.")] = False,
+) -> list[dict]:
+    """List the authenticated user's notifications, newest first.
+
+    Requires ``SPEEDRUN_API_KEY``.
+    """
+    notifs = await _require_auth().get_notifications()
+    if unread_only:
+        notifs = [n for n in notifs if n.get("status") == "unread"]
+    return [fmt.notification_view(n) for n in notifs[:limit]]
+
+
+@mcp.tool(annotations=_read_anno("List unverified runs"))
+async def list_unverified_runs(
+    game: Annotated[str, Field(description="Game id or abbreviation.")],
+    limit: Annotated[int, Field(ge=1, le=200, description="Max runs to return.")] = 20,
+) -> list[dict]:
+    """List a game's runs awaiting verification — the moderation queue.
+
+    A public read (no API key needed). Pair with ``verify_run`` / ``reject_run``
+    (which do require a moderator key) to clear the queue.
+    """
+    runs = await _get_client().get_runs(
+        status="new",
+        game=game,
+        orderby="submitted",
+        direction="desc",
+        maximum=limit,
+        embed="players",
+    )
+    return [fmt.submission_result(r) for r in runs]
+
+
+# -- authenticated: run submission & moderation (gated by SPEEDRUN_ENABLE_WRITES)
+
+
+@_write_tool(annotations=_write_anno("Submit a run"))
+async def submit_run(
+    category: Annotated[str, Field(description="Category id (from list_categories).")],
+    platform: Annotated[str, Field(description="Platform id (from list_platforms).")],
+    realtime: Annotated[
+        float | None, Field(description="Real-time (RTA) in seconds.")
+    ] = None,
+    ingame: Annotated[float | None, Field(description="In-game time (IGT) in seconds.")] = None,
+    realtime_noloads: Annotated[
+        float | None, Field(description="Real-time without loads, in seconds.")
+    ] = None,
+    level: Annotated[
+        str | None, Field(description="Level id, for an individual-level run.")
+    ] = None,
+    date: Annotated[str | None, Field(description="Run date as YYYY-MM-DD.")] = None,
+    region: Annotated[str | None, Field(description="Region id (from list_regions).")] = None,
+    video: Annotated[str | None, Field(description="Video proof URL.")] = None,
+    comment: Annotated[str | None, Field(description="Run comment / description.")] = None,
+    emulated: Annotated[bool, Field(description="Whether the run used an emulator.")] = False,
+    variables: Annotated[
+        dict[str, str] | None,
+        Field(description="Subcategory choices as {variable_id: value_id} (from list_variables)."),
+    ] = None,
+) -> dict:
+    """Submit a run to a leaderboard under your account (enters the mod queue).
+
+    Provide at least one timing (``realtime`` / ``ingame`` / ``realtime_noloads``)
+    in seconds. Resolve ``category`` / ``platform`` / ``variables`` ids with
+    list_categories / list_platforms / list_variables first.
+    """
+    times: dict[str, float] = {}
+    if realtime is not None:
+        times["realtime"] = realtime
+    if ingame is not None:
+        times["ingame"] = ingame
+    if realtime_noloads is not None:
+        times["realtime_noloads"] = realtime_noloads
+    if not times:
+        raise ValueError(
+            "Provide at least one time: realtime, ingame, or realtime_noloads (seconds)."
+        )
+    # The API keys variables by id with {"type", "value"}; subcategory selections
+    # are pre-defined value ids.
+    var_payload = (
+        {vid: {"type": "pre-defined", "value": val} for vid, val in variables.items()}
+        if variables
+        else None
+    )
+    run = await _require_auth().submit_run(
+        category=category,
+        platform=platform,
+        times=times,
+        level=level,
+        date=date,
+        region=region,
+        video=video,
+        comment=comment,
+        emulated=emulated,
+        variables=var_payload,
+    )
+    return fmt.submission_result(run)
+
+
+@_write_tool(annotations=_write_anno("Verify a run", idempotent=True))
+async def verify_run(
+    run_id: Annotated[str, Field(description="The run id to verify.")],
+) -> dict:
+    """Mark a run as verified. Moderator only — requires a moderator API key."""
+    run = await _require_auth().set_run_status(run_id, "verified")
+    return fmt.submission_result(run)
+
+
+@_write_tool(annotations=_write_anno("Reject a run", destructive=True))
+async def reject_run(
+    run_id: Annotated[str, Field(description="The run id to reject.")],
+    reason: Annotated[str, Field(description="Why the run is rejected (required).")],
+) -> dict:
+    """Reject a run with a reason. Moderator only — requires a moderator API key."""
+    run = await _require_auth().set_run_status(run_id, "rejected", reason=reason)
+    return fmt.submission_result(run)
+
+
+@_write_tool(annotations=_write_anno("Set run players", destructive=True))
+async def set_run_players(
+    run_id: Annotated[str, Field(description="The run id whose players to set.")],
+    user_ids: Annotated[
+        list[str] | None, Field(description="Registered player user ids.")
+    ] = None,
+    guests: Annotated[
+        list[str] | None, Field(description="Guest player names (no account).")
+    ] = None,
+) -> dict:
+    """Replace a run's player list. Moderator only.
+
+    The new list *replaces* the existing one entirely — pass every player, not
+    just additions.
+    """
+    players: list[dict[str, str]] = [{"rel": "user", "id": u} for u in (user_ids or [])]
+    players += [{"rel": "guest", "name": g} for g in (guests or [])]
+    if not players:
+        raise ValueError("Provide at least one user_id or guest.")
+    run = await _require_auth().set_run_players(run_id, players)
+    return fmt.submission_result(run)
+
+
+@_write_tool(annotations=_write_anno("Delete a run", destructive=True))
+async def delete_run(
+    run_id: Annotated[str, Field(description="The run id to delete.")],
+) -> dict:
+    """Delete a run — your own, or any run for global moderators. Irreversible."""
+    run = await _require_auth().delete_run(run_id)
+    return fmt.submission_result(run)
 
 
 def main() -> None:
