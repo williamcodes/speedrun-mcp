@@ -9,6 +9,8 @@ Docs: https://github.com/speedruncomorg/api/tree/master/version1
 
 from __future__ import annotations
 
+import math
+from datetime import date as _date
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -44,6 +46,13 @@ class AuthError(SpeedrunError):
 
     speedrun.com answers 403 (not 401) for both a missing and an invalid key.
     """
+
+
+def _require_nonblank(value: str, field: str) -> str:
+    """Reject an empty/whitespace required id locally (clearer than a remote 404)."""
+    if not value or not value.strip():
+        raise ValueError(f"{field} must be a non-empty value.")
+    return value
 
 
 class SpeedrunClient:
@@ -401,6 +410,22 @@ class SpeedrunClient:
         """
         if not times:
             raise ValueError("times needs at least one of realtime / realtime_noloads / ingame.")
+        _require_nonblank(category, "category")
+        _require_nonblank(platform, "platform")
+        # Reject universally-invalid input locally for a clear, cheap error; the
+        # API remains the source of truth for game-specific rules.
+        for time_name, seconds in times.items():
+            if not isinstance(seconds, int | float) or not math.isfinite(seconds) or seconds <= 0:
+                raise ValueError(
+                    f"time '{time_name}' must be a positive, finite number of seconds."
+                )
+        if date is not None:
+            try:
+                _date.fromisoformat(date)
+            except ValueError as exc:
+                raise ValueError(f"date must be in YYYY-MM-DD form, got {date!r}.") from exc
+        if video is not None and not video.startswith(("http://", "https://")):
+            raise ValueError("video must be an http(s) URL.")
         run: dict[str, Any] = {"category": category, "platform": platform, "times": times}
         optional = {
             "level": level,
@@ -422,8 +447,9 @@ class SpeedrunClient:
         Body is double-nested: ``{"status": {"status": ..., "reason": ...}}``.
         A rejection requires a ``reason``.
         """
-        if status == "rejected" and not reason:
-            raise ValueError("Rejecting a run requires a reason.")
+        _require_nonblank(run_id, "run_id")
+        if status == "rejected" and not (reason and reason.strip()):
+            raise ValueError("Rejecting a run requires a non-empty reason.")
         inner: dict[str, Any] = {"status": status}
         if reason is not None:
             inner["reason"] = reason
@@ -434,8 +460,10 @@ class SpeedrunClient:
 
         The list is a full replacement — include every player, not just additions.
         """
+        _require_nonblank(run_id, "run_id")
         return await self._send("PUT", f"/runs/{run_id}/players", json={"players": players})
 
     async def delete_run(self, run_id: str) -> dict:
         """Delete a run (DELETE /runs/{id}). Own runs, or any run for global mods."""
+        _require_nonblank(run_id, "run_id")
         return await self._send("DELETE", f"/runs/{run_id}")
