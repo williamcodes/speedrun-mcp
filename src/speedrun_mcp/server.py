@@ -387,9 +387,7 @@ async def list_runs(
     user: Annotated[
         str | None, Field(description="Filter to a player's runs (user id or username).")
     ] = None,
-    game: Annotated[
-        str | None, Field(description="Filter to a game (id or abbreviation).")
-    ] = None,
+    game: Annotated[str | None, Field(description="Filter to a game (id or abbreviation).")] = None,
     category: Annotated[str | None, Field(description="Filter to a category id.")] = None,
     status: Annotated[
         str | None, Field(description="Filter by status: 'new', 'verified', or 'rejected'.")
@@ -512,9 +510,7 @@ async def list_unverified_runs(
 async def submit_run(
     category: Annotated[str, Field(description="Category id (from list_categories).")],
     platform: Annotated[str, Field(description="Platform id (from list_platforms).")],
-    realtime: Annotated[
-        float | None, Field(description="Real-time (RTA) in seconds.")
-    ] = None,
+    realtime: Annotated[float | None, Field(description="Real-time (RTA) in seconds.")] = None,
     ingame: Annotated[float | None, Field(description="In-game time (IGT) in seconds.")] = None,
     realtime_noloads: Annotated[
         float | None, Field(description="Real-time without loads, in seconds.")
@@ -599,9 +595,7 @@ async def reject_run(
 @_auth_tool(annotations=_write_anno("Set run players", destructive=True))
 async def set_run_players(
     run_id: Annotated[str, Field(description="The run id whose players to set.")],
-    user_ids: Annotated[
-        list[str] | None, Field(description="Registered player user ids.")
-    ] = None,
+    user_ids: Annotated[list[str] | None, Field(description="Registered player user ids.")] = None,
     guests: Annotated[
         list[str] | None, Field(description="Guest player names (no account).")
     ] = None,
@@ -624,7 +618,10 @@ async def set_run_players(
 async def delete_run(
     run_id: Annotated[str, Field(description="The run id to delete.")],
 ) -> dict:
-    """Delete a run — your own, or any for global mods. Needs write mode (SPEEDRUN_ENABLE_WRITES=1). Irreversible."""
+    """Delete a run — your own, or any for global mods. Irreversible.
+
+    Needs write mode (SPEEDRUN_ENABLE_WRITES=1).
+    """
     _require_writes()
     run = await _require_auth().delete_run(run_id)
     return fmt.submission_result(run)

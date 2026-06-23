@@ -192,7 +192,9 @@ async def test_delete_run_uses_delete_method():
 
 async def test_delete_run_tolerates_empty_body():
     # A 204 / empty write response must come back as None, not crash.
-    async with SpeedrunClient(api_key="k", transport=_transport(lambda _r: httpx.Response(204))) as c:
+    async with SpeedrunClient(
+        api_key="k", transport=_transport(lambda _r: httpx.Response(204))
+    ) as c:
         assert await c.delete_run("r1") is None
 
 
@@ -222,21 +224,29 @@ async def test_set_run_players_body_shape():
         return httpx.Response(200, json={"data": {"id": "r1", "status": {"status": "verified"}}})
 
     async with SpeedrunClient(api_key="k", transport=_transport(handler)) as c:
-        await c.set_run_players("r1", [{"rel": "user", "id": "u1"}, {"rel": "guest", "name": "Bob"}])
+        await c.set_run_players(
+            "r1", [{"rel": "user", "id": "u1"}, {"rel": "guest", "name": "Bob"}]
+        )
 
     assert seen["method"] == "PUT"
     assert seen["path"].endswith("/runs/r1/players")
-    assert seen["body"] == {"players": [{"rel": "user", "id": "u1"}, {"rel": "guest", "name": "Bob"}]}
+    assert seen["body"] == {
+        "players": [{"rel": "user", "id": "u1"}, {"rel": "guest", "name": "Bob"}]
+    }
 
 
 async def test_submit_run_requires_a_time():
-    async with SpeedrunClient(api_key="k", transport=_transport(lambda _r: httpx.Response(201))) as c:
+    async with SpeedrunClient(
+        api_key="k", transport=_transport(lambda _r: httpx.Response(201))
+    ) as c:
         with pytest.raises(ValueError):
             await c.submit_run(category="c", platform="p", times={})
 
 
 async def test_reject_requires_a_reason():
-    async with SpeedrunClient(api_key="k", transport=_transport(lambda _r: httpx.Response(200))) as c:
+    async with SpeedrunClient(
+        api_key="k", transport=_transport(lambda _r: httpx.Response(200))
+    ) as c:
         with pytest.raises(ValueError):
             await c.set_run_status("r1", "rejected")
 
@@ -246,8 +256,10 @@ async def test_get_paginated_walks_pages_and_clamps_to_200():
     # request must be clamped to 200 so the short-page break can't truncate
     # after page 0.
     pages = {
-        0: {"data": [{"id": f"a{i}"} for i in range(200)],
-            "pagination": {"links": [{"rel": "next", "uri": "x"}]}},
+        0: {
+            "data": [{"id": f"a{i}"} for i in range(200)],
+            "pagination": {"links": [{"rel": "next", "uri": "x"}]},
+        },
         200: {"data": [{"id": "b0"}, {"id": "b1"}], "pagination": {"links": []}},
     }
     seen = []
@@ -261,6 +273,6 @@ async def test_get_paginated_walks_pages_and_clamps_to_200():
     async with SpeedrunClient(transport=_transport(handler)) as c:
         items = await c._get_paginated("/platforms", {"max": 500})
 
-    assert [off for off, _ in seen] == [0, 200]   # walked both pages and stopped
-    assert all(mx == 200 for _, mx in seen)        # clamped, never requested 500
+    assert [off for off, _ in seen] == [0, 200]  # walked both pages and stopped
+    assert all(mx == 200 for _, mx in seen)  # clamped, never requested 500
     assert len(items) == 202
