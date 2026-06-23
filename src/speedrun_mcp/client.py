@@ -76,7 +76,7 @@ class SpeedrunClient:
             transport=transport,  # injectable for offline tests
         )
 
-    async def __aenter__(self) -> "SpeedrunClient":
+    async def __aenter__(self) -> SpeedrunClient:
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
@@ -299,9 +299,7 @@ class SpeedrunClient:
     async def get_user(self, user: str) -> dict:
         return await self._get(f"/users/{user}")
 
-    async def get_user_personal_bests(
-        self, user: str, *, embed: str | None = None
-    ) -> list[dict]:
+    async def get_user_personal_bests(self, user: str, *, embed: str | None = None) -> list[dict]:
         return await self._get(f"/users/{user}/personal-bests", {"embed": embed})
 
     async def get_run(self, run_id: str, *, embed: str | None = None) -> dict:

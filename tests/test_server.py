@@ -42,8 +42,13 @@ async def test_tool_exposure_tracks_api_key():
 
     # public reads are always exposed (no key needed)
     assert {
-        "search_games", "get_leaderboard", "list_unverified_runs",
-        "search_series", "get_series", "list_runs", "get_game_records",
+        "search_games",
+        "get_leaderboard",
+        "list_unverified_runs",
+        "search_series",
+        "get_series",
+        "list_runs",
+        "get_game_records",
     } <= names
 
     # every authenticated tool — identity reads AND the write tools — is exposed
@@ -51,8 +56,13 @@ async def test_tool_exposure_tracks_api_key():
     # discoverable; the flag controls whether they *run*, not whether they show).
     # The functions are always defined on the module regardless.
     authed = (
-        "whoami", "list_notifications",
-        "submit_run", "verify_run", "reject_run", "set_run_players", "delete_run",
+        "whoami",
+        "list_notifications",
+        "submit_run",
+        "verify_run",
+        "reject_run",
+        "set_run_players",
+        "delete_run",
     )
     for name in authed:
         assert callable(getattr(s, name))

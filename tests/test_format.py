@@ -125,10 +125,22 @@ def test_leaderboard_view_flattens_and_orders():
         "players": {"data": [{"id": "u1", "names": {"international": "Suigi"}}]},
         "variables": {"data": []},
         "runs": [
-            {"place": 1, "run": {"id": "r1", "players": [{"rel": "user", "id": "u1"}],
-                                 "times": {"primary_t": 875.5}}},
-            {"place": 2, "run": {"id": "r2", "players": [{"rel": "guest", "name": "Weegee"}],
-                                 "times": {"primary_t": 876.42}}},
+            {
+                "place": 1,
+                "run": {
+                    "id": "r1",
+                    "players": [{"rel": "user", "id": "u1"}],
+                    "times": {"primary_t": 875.5},
+                },
+            },
+            {
+                "place": 2,
+                "run": {
+                    "id": "r2",
+                    "players": [{"rel": "guest", "name": "Weegee"}],
+                    "times": {"primary_t": 876.42},
+                },
+            },
         ],
     }
     view = fmt.leaderboard_view(lb)
@@ -143,10 +155,14 @@ def test_leaderboard_view_flattens_and_orders():
 
 def test_leaderboard_view_respects_limit():
     lb = {
-        "game": "g1", "category": "c1",
-        "players": {"data": []}, "variables": {"data": []},
-        "runs": [{"place": i, "run": {"id": f"r{i}", "times": {"primary_t": float(i)}}}
-                 for i in range(1, 11)],
+        "game": "g1",
+        "category": "c1",
+        "players": {"data": []},
+        "variables": {"data": []},
+        "runs": [
+            {"place": i, "run": {"id": f"r{i}", "times": {"primary_t": float(i)}}}
+            for i in range(1, 11)
+        ],
     }
     view = fmt.leaderboard_view(lb, limit=3)
     assert len(view["runs"]) == 3
@@ -245,10 +261,12 @@ def test_variable_summary_tolerates_null_value_meta():
 
 def test_leaderboard_view_skips_variable_without_id():
     lb = {
-        "game": "g1", "category": "c1",
+        "game": "g1",
+        "category": "c1",
         "players": {"data": []},
         "variables": {"data": [{"name": "Stars", "values": {"values": {}}}]},  # no id key
-        "values": {}, "runs": [],
+        "values": {},
+        "runs": [],
     }
     view = fmt.leaderboard_view(lb)  # must not raise KeyError
     assert view["returned_runs"] == 0
@@ -256,7 +274,10 @@ def test_leaderboard_view_skips_variable_without_id():
 
 def test_video_link_text_fallback_and_nondict_element():
     # older runs store the URL in videos.text
-    assert fmt._video_link({"videos": {"text": "https://old.example/run"}}) == "https://old.example/run"
+    assert (
+        fmt._video_link({"videos": {"text": "https://old.example/run"}})
+        == "https://old.example/run"
+    )
     # a bare-string link element is used directly, not .get()'d
     assert fmt._video_link({"videos": {"links": ["https://x.example/v"]}}) == "https://x.example/v"
     # no video -> None, and run_entry drops the key
