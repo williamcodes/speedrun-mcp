@@ -64,7 +64,9 @@ async def test_validation_errors_surface_field_reasons():
 
     async with SpeedrunClient(api_key="k", transport=_transport(handler)) as c:
         with pytest.raises(SpeedrunError) as excinfo:
-            await c.submit_run(category="", platform="p", times={"realtime": 1})
+            # Valid-looking input so it passes local validation and reaches the
+            # (mocked) API, whose schema rejection we want surfaced.
+            await c.submit_run(category="cat", platform="plat", times={"realtime": 1.0})
     msg = str(excinfo.value)
     assert "does not validate" in msg
     assert "[category] is missing" in msg  # the per-field reason is surfaced
@@ -249,6 +251,53 @@ async def test_reject_requires_a_reason():
     ) as c:
         with pytest.raises(ValueError):
             await c.set_run_status("r1", "rejected")
+
+
+async def test_submit_run_rejects_invalid_times():
+    async with SpeedrunClient(
+        api_key="k", transport=_transport(lambda _r: httpx.Response(201))
+    ) as c:
+        for bad in (-1.0, 0.0, float("inf"), float("nan")):
+            with pytest.raises(ValueError):
+                await c.submit_run(category="c", platform="p", times={"realtime": bad})
+
+
+async def test_submit_run_rejects_blank_ids_bad_date_and_video():
+    async with SpeedrunClient(
+        api_key="k", transport=_transport(lambda _r: httpx.Response(201))
+    ) as c:
+        with pytest.raises(ValueError):
+            await c.submit_run(category="   ", platform="p", times={"realtime": 1.0})
+        with pytest.raises(ValueError):
+            await c.submit_run(category="c", platform="", times={"realtime": 1.0})
+        with pytest.raises(ValueError):
+            await c.submit_run(
+                category="c", platform="p", times={"realtime": 1.0}, date="01/02/2023"
+            )
+        with pytest.raises(ValueError):
+            await c.submit_run(
+                category="c", platform="p", times={"realtime": 1.0}, video="not-a-url"
+            )
+
+
+async def test_reject_requires_a_nonblank_reason():
+    async with SpeedrunClient(
+        api_key="k", transport=_transport(lambda _r: httpx.Response(200))
+    ) as c:
+        with pytest.raises(ValueError):
+            await c.set_run_status("r1", "rejected", reason="   ")
+
+
+async def test_write_methods_reject_blank_run_id():
+    async with SpeedrunClient(
+        api_key="k", transport=_transport(lambda _r: httpx.Response(200))
+    ) as c:
+        with pytest.raises(ValueError):
+            await c.delete_run("")
+        with pytest.raises(ValueError):
+            await c.set_run_players("  ", [{"rel": "user", "id": "u1"}])
+        with pytest.raises(ValueError):
+            await c.set_run_status("", "verified")
 
 
 async def test_get_paginated_walks_pages_and_clamps_to_200():
