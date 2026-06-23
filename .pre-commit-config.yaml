@@ -1,0 +1,19 @@
+# Local git hooks. Enable once with:  pre-commit install
+# (run from an environment with the dev deps installed: pip install -e ".[dev]")
+# CI runs these same checks plus the test suite — see .github/workflows/ci.yml
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.18
+    hooks:
+      - id: ruff-check     # lint (auto-fixes where safe)
+        args: [--fix]
+      - id: ruff-format    # format
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy        # uses the mypy on your PATH (the dev venv)
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
