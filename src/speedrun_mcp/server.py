@@ -472,7 +472,10 @@ async def list_notifications(
 
     Requires ``SPEEDRUN_API_KEY``.
     """
-    notifs = await _require_auth().get_notifications()
+    # Bound the fetch to what we need, with headroom when filtering to unread so
+    # the single-page filter is less likely to under-return.
+    fetch = min(100, max(limit * 5, 20)) if unread_only else limit
+    notifs = await _require_auth().get_notifications(maximum=fetch)
     if unread_only:
         notifs = [n for n in notifs if n.get("status") == "unread"]
     return [fmt.notification_view(n) for n in notifs[:limit]]
@@ -523,7 +526,9 @@ async def submit_run(
     region: Annotated[str | None, Field(description="Region id (from list_regions).")] = None,
     video: Annotated[str | None, Field(description="Video proof URL.")] = None,
     comment: Annotated[str | None, Field(description="Run comment / description.")] = None,
-    emulated: Annotated[bool, Field(description="Whether the run used an emulator.")] = False,
+    emulated: Annotated[
+        bool | None, Field(description="Whether the run used an emulator (omitted if unset).")
+    ] = None,
     variables: Annotated[
         dict[str, str] | None,
         Field(description="Subcategory choices as {variable_id: value_id} (from list_variables)."),

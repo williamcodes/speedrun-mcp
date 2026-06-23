@@ -111,9 +111,12 @@ class SpeedrunClient:
 
         if resp.status_code in (401, 403):
             detail = self._error_message(resp)
+            # 403 covers both a missing/invalid key AND a valid key without
+            # permission (e.g. a non-moderator calling verify/reject), so don't
+            # assert the key is bad — the surfaced detail disambiguates.
             msg = (
-                f"speedrun.com rejected {method} {path} as unauthenticated "
-                f"(HTTP {resp.status_code}); it needs a valid API key."
+                f"speedrun.com rejected {method} {path} (HTTP {resp.status_code}); "
+                "your API key may be missing, invalid, or lack permission for this action."
             )
             if detail:
                 msg = f"{msg} speedrun.com says: {detail}"
@@ -170,7 +173,10 @@ class SpeedrunClient:
         following the ``pagination.links`` ``next`` marker / incrementing offset.
         """
         merged = dict(params or {})
-        page_size = int(merged.get("max") or 200)
+        # The API hard-caps every page at 200. Clamp so the short-page break
+        # (len(data) < page_size) can't fire prematurely and truncate when a
+        # caller asks for max > 200.
+        page_size = min(int(merged.get("max") or 200), 200)
         merged["max"] = page_size
         collected: list[dict] = []
         offset = 0
@@ -326,9 +332,11 @@ class SpeedrunClient:
         """The user that owns the API key (GET /profile). Requires auth."""
         return await self._get("/profile")
 
-    async def get_notifications(self, *, direction: str = "desc") -> list[dict]:
+    async def get_notifications(self, *, direction: str = "desc", maximum: int = 20) -> list[dict]:
         """The authenticated user's notifications, newest first. Requires auth."""
-        return await self._get("/notifications", {"orderby": "created", "direction": direction})
+        return await self._get(
+            "/notifications", {"orderby": "created", "direction": direction, "max": maximum}
+        )
 
     # -- runs: moderation-queue read ------------------------------------------
 
@@ -393,6 +401,8 @@ class SpeedrunClient:
         ``ingame`` (seconds). ``variables`` is keyed by variable id with
         ``{"type": "pre-defined"|"user-defined", "value": ...}`` values.
         """
+        if not times:
+            raise ValueError("times needs at least one of realtime / realtime_noloads / ingame.")
         run: dict[str, Any] = {"category": category, "platform": platform, "times": times}
         optional = {
             "level": level,
@@ -414,6 +424,8 @@ class SpeedrunClient:
         Body is double-nested: ``{"status": {"status": ..., "reason": ...}}``.
         A rejection requires a ``reason``.
         """
+        if status == "rejected" and not reason:
+            raise ValueError("Rejecting a run requires a reason.")
         inner: dict[str, Any] = {"status": status}
         if reason is not None:
             inner["reason"] = reason

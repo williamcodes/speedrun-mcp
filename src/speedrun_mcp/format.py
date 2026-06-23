@@ -83,7 +83,7 @@ def variable_summary(var: dict) -> dict:
         # top-level category id this variable is scoped to (null = all categories)
         "category": var.get("category"),
         # map value-id -> label so a caller can pass var-<id>=<value-id> back in
-        "values": {vid: meta.get("label") for vid, meta in values.items()},
+        "values": {vid: (meta or {}).get("label") for vid, meta in values.items()},
     }
     # preserve the scoping level id when the scope carries one (e.g. single-level)
     if scope.get("level") is not None:
@@ -110,7 +110,9 @@ def _resolve_players(run: dict, name_map: dict[str, str]) -> list[str]:
       * guest:                 ``{"rel": "guest", "name": ...}``
     """
     players = run.get("players")
-    items = players.get("data") if isinstance(players, dict) else (players or [])
+    # ``or []`` guards against an embedded block of the form {"data": null},
+    # which the API can return for an unresolvable embed.
+    items = (players.get("data") if isinstance(players, dict) else players) or []
     names: list[str] = []
     for p in items:
         if "names" in p:  # full embedded user object
@@ -126,7 +128,8 @@ def _video_link(run: dict) -> str | None:
     videos = run.get("videos") or {}
     links = videos.get("links")
     if links and isinstance(links, list):
-        uri = links[0].get("uri")
+        first = links[0]
+        uri = first.get("uri") if isinstance(first, dict) else first
         if uri:
             return uri
     # Older runs store the URL in ``videos.text`` instead of a links list.
@@ -204,7 +207,9 @@ def leaderboard_view(lb: dict, *, limit: int | None = None) -> dict:
     variable_meta: dict[str, dict] = {}
     for var in (lb.get("variables") or {}).get("data", []):
         summary = variable_summary(var)
-        variable_meta[var["id"]] = {"name": summary["name"], "values": summary["values"]}
+        if summary["id"] is None:  # skip a malformed/partial embedded variable
+            continue
+        variable_meta[summary["id"]] = {"name": summary["name"], "values": summary["values"]}
 
     timing = lb.get("timing")
     rows = lb.get("runs") or []
@@ -285,13 +290,15 @@ def notification_view(notif: dict) -> dict:
     return {k: v for k, v in out.items() if v is not None}
 
 
-def submission_result(run: dict, *, name_map: dict[str, str] | None = None) -> dict:
+def submission_result(run: dict | None, *, name_map: dict[str, str] | None = None) -> dict:
     """Compact view of a run returned by submit/verify/reject/delete or the queue.
 
     The submit/moderation responses use the *read* run shape, so the time comes
     from ``times.primary_t`` and players may be id-references (resolved via
-    ``name_map`` when an embed was requested).
+    ``name_map`` when an embed was requested). A write that answers with an empty
+    body (the client returns ``None``) yields ``{}`` — a no-detail success.
     """
+    run = run or {}
     status = run.get("status") or {}
     times = run.get("times") or {}
     out: dict[str, Any] = {
