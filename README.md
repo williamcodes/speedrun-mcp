@@ -1,18 +1,44 @@
-# speedrun-mcp
+# ⏱️ speedrun-mcp
 
 <!-- mcp-name: io.github.williamcodes/speedrun-mcp -->
 
+[![PyPI version](https://img.shields.io/pypi/v/speedrun-mcp?logo=pypi&logoColor=white)](https://pypi.org/project/speedrun-mcp/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)](https://pypi.org/project/speedrun-mcp/)
+[![CI](https://github.com/williamcodes/speedrun-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/williamcodes/speedrun-mcp/actions/workflows/ci.yml)
+[![MCP registry](https://img.shields.io/badge/MCP-registry-0098FF)](https://registry.modelcontextprotocol.io)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 A [Model Context Protocol](https://modelcontextprotocol.io) server for
-[speedrun.com](https://www.speedrun.com). It lets an AI assistant query games,
-categories, leaderboards, world records, players and their personal bests —
-e.g. *"What's the current Super Mario 64 16-star world record, and who holds it?"*
+[speedrun.com](https://www.speedrun.com) — let an AI assistant query games,
+categories, leaderboards, world records, players and their personal bests, and
+(with an API key) submit and moderate runs.
+
+> *"What's the current Super Mario 64 16-star world record, and who holds it?"*
 
 Built on speedrun.com's official [REST API](https://github.com/speedruncomorg/api).
-**The read endpoints need no account or API key.** Add a key (see
+**The read tools need no account or API key** — add a key (see
 [Authenticated features](#authenticated-features)) to unlock identity reads and,
-optionally, run submission and moderation. Results are shaped into compact,
+optionally, run submission and moderation. Results come back as compact,
 model-friendly JSON (player ids resolved to names, durations formatted,
 subcategory variables labeled).
+
+## Example
+
+Ask *"the SM64 16-star world record?"* and the model calls `get_world_record`,
+which returns compact, resolved JSON:
+
+```json
+{
+  "game_name": "Super Mario 64",
+  "category_name": "16 Star",
+  "world_record": {
+    "players": ["Suigi"],
+    "time": "14m 35.5s",
+    "date": "2023-03-22",
+    "video": "https://youtu.be/1_vkwkniHuI"
+  }
+}
+```
 
 ## Tools
 
