@@ -22,3 +22,6 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# uv lockfile (this is a pip/setuptools project; uv used only locally)
+uv.lock

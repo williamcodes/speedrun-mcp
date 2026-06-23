@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "speedrun-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "Model Context Protocol server for the speedrun.com API — games, leaderboards, world records, players, personal bests, and (with an API key) run submission and moderation."
 readme = "README.md"
 requires-python = ">=3.10"
