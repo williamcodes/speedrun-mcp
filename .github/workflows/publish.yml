@@ -5,12 +5,34 @@ name: Publish to PyPI
 # trusted publisher once at https://pypi.org/manage/account/publishing/ with:
 #   project: speedrun-mcp · owner: williamcodes · repo: speedrun-mcp
 #   workflow: publish.yml
+#
+# A release only publishes if the full CI suite passes AND the release tag
+# matches pyproject's version AND the built wheel installs and reports that
+# version — so a broken or mis-tagged release can't reach PyPI.
 on:
   release:
     types: [published]
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml # lint + format + mypy + tests (3.10–3.13)
+
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assert the release tag matches pyproject version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"  # v0.3.1 -> 0.3.1
+          ver="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
+          echo "release tag: $tag | pyproject version: $ver"
+          if [ "$tag" != "$ver" ]; then
+            echo "::error::Release tag ($tag) does not match pyproject version ($ver)"
+            exit 1
+          fi
+
   build:
+    needs: [ci, verify-version]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -19,6 +41,13 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade build
       - run: python -m build
+      - name: Smoke-test the built wheel
+        run: |
+          python -m pip install dist/*.whl
+          installed="$(python -c 'from importlib.metadata import version; print(version("speedrun-mcp"))')"
+          echo "installed: $installed"
+          python -c "import speedrun_mcp"  # import the package
+          test "$installed" = "${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@v7
         with:
           name: dist
@@ -28,7 +57,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # required for OIDC trusted publishing
+      id-token: write # required for OIDC trusted publishing
     steps:
       - uses: actions/download-artifact@v8
         with:
