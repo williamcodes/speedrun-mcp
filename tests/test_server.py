@@ -59,13 +59,25 @@ async def test_tool_exposure_tracks_api_key():
         assert (name in names) is s.AUTH_ENABLED
 
 
-async def test_write_tools_blocked_with_clear_message_when_read_only():
-    # A write call in read-only mode must fail with an actionable error naming
-    # SPEEDRUN_ENABLE_WRITES — and do so before needing a key or the network.
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: s.submit_run(category="x", platform="y", realtime=1.0),
+        lambda: s.verify_run(run_id="r"),
+        lambda: s.reject_run(run_id="r", reason="bad"),
+        lambda: s.set_run_players(run_id="r", user_ids=["u1"]),
+        lambda: s.delete_run(run_id="r"),
+    ],
+    ids=["submit_run", "verify_run", "reject_run", "set_run_players", "delete_run"],
+)
+async def test_every_write_tool_blocked_when_read_only(call):
+    # Each of the five write tools (incl. the irreversible delete_run) must refuse
+    # in read-only mode with an actionable error naming SPEEDRUN_ENABLE_WRITES —
+    # before any key or network access.
     if s.WRITES_ENABLED:
         pytest.skip("writes are enabled in this environment")
     with pytest.raises(RuntimeError) as excinfo:
-        await s.submit_run(category="x", platform="y", realtime=1.0)
+        await call()
     assert "SPEEDRUN_ENABLE_WRITES" in str(excinfo.value)
 
 

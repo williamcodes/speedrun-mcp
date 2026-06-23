@@ -10,7 +10,13 @@ import json
 import httpx
 import pytest
 
-from speedrun_mcp.client import AuthError, SpeedrunClient, SpeedrunError
+from speedrun_mcp.client import (
+    AuthError,
+    NotFoundError,
+    RateLimitError,
+    SpeedrunClient,
+    SpeedrunError,
+)
 
 
 def _transport(handler):
@@ -182,3 +188,79 @@ async def test_delete_run_uses_delete_method():
     assert seen["method"] == "DELETE"
     assert seen["path"].endswith("/runs/r1")
     assert data["id"] == "r1"
+
+
+async def test_delete_run_tolerates_empty_body():
+    # A 204 / empty write response must come back as None, not crash.
+    async with SpeedrunClient(api_key="k", transport=_transport(lambda _r: httpx.Response(204))) as c:
+        assert await c.delete_run("r1") is None
+
+
+async def test_rate_limit_status_raises_rate_limit_error():
+    async with SpeedrunClient(transport=_transport(lambda _r: httpx.Response(420))) as c:
+        with pytest.raises(RateLimitError):
+            await c.search_games("x")
+
+
+async def test_not_found_status_raises_not_found_error():
+    def handler(_request):
+        return httpx.Response(404, json={"status": 404, "message": "Not found."})
+
+    async with SpeedrunClient(transport=_transport(handler)) as c:
+        with pytest.raises(NotFoundError) as excinfo:
+            await c.get_game("bogus")
+    assert "speedrun.com says" in str(excinfo.value)
+
+
+async def test_set_run_players_body_shape():
+    seen = {}
+
+    def handler(request):
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"data": {"id": "r1", "status": {"status": "verified"}}})
+
+    async with SpeedrunClient(api_key="k", transport=_transport(handler)) as c:
+        await c.set_run_players("r1", [{"rel": "user", "id": "u1"}, {"rel": "guest", "name": "Bob"}])
+
+    assert seen["method"] == "PUT"
+    assert seen["path"].endswith("/runs/r1/players")
+    assert seen["body"] == {"players": [{"rel": "user", "id": "u1"}, {"rel": "guest", "name": "Bob"}]}
+
+
+async def test_submit_run_requires_a_time():
+    async with SpeedrunClient(api_key="k", transport=_transport(lambda _r: httpx.Response(201))) as c:
+        with pytest.raises(ValueError):
+            await c.submit_run(category="c", platform="p", times={})
+
+
+async def test_reject_requires_a_reason():
+    async with SpeedrunClient(api_key="k", transport=_transport(lambda _r: httpx.Response(200))) as c:
+        with pytest.raises(ValueError):
+            await c.set_run_status("r1", "rejected")
+
+
+async def test_get_paginated_walks_pages_and_clamps_to_200():
+    # Page 0 is full (200) with a next link; page 1 is short (final). A max>200
+    # request must be clamped to 200 so the short-page break can't truncate
+    # after page 0.
+    pages = {
+        0: {"data": [{"id": f"a{i}"} for i in range(200)],
+            "pagination": {"links": [{"rel": "next", "uri": "x"}]}},
+        200: {"data": [{"id": "b0"}, {"id": "b1"}], "pagination": {"links": []}},
+    }
+    seen = []
+
+    def handler(request):
+        off = int(request.url.params.get("offset", 0))
+        mx = int(request.url.params.get("max", 0))
+        seen.append((off, mx))
+        return httpx.Response(200, json=pages[off])
+
+    async with SpeedrunClient(transport=_transport(handler)) as c:
+        items = await c._get_paginated("/platforms", {"max": 500})
+
+    assert [off for off, _ in seen] == [0, 200]   # walked both pages and stopped
+    assert all(mx == 200 for _, mx in seen)        # clamped, never requested 500
+    assert len(items) == 202

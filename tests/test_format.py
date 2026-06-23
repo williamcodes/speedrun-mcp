@@ -224,3 +224,41 @@ def test_submission_result_is_compact_and_drops_empties():
     assert out["players"] == ["Suigi"]
     assert out["time"] == "1m 32.5s"
     assert "submitted" not in out
+
+
+def test_submission_result_handles_none_for_empty_write_body():
+    # A write that answers with an empty body makes the client return None;
+    # submission_result must yield {} rather than crash.
+    assert fmt.submission_result(None) == {}
+
+
+def test_resolve_players_tolerates_null_data_block():
+    # An unresolvable embed can return {"data": null}; must degrade, not raise.
+    assert fmt._resolve_players({"players": {"data": None}}, {}) == []
+
+
+def test_variable_summary_tolerates_null_value_meta():
+    var = {"id": "v1", "name": "Stars", "values": {"values": {"valX": None}}, "scope": {}}
+    out = fmt.variable_summary(var)
+    assert out["values"] == {"valX": None}  # no crash; label is just None
+
+
+def test_leaderboard_view_skips_variable_without_id():
+    lb = {
+        "game": "g1", "category": "c1",
+        "players": {"data": []},
+        "variables": {"data": [{"name": "Stars", "values": {"values": {}}}]},  # no id key
+        "values": {}, "runs": [],
+    }
+    view = fmt.leaderboard_view(lb)  # must not raise KeyError
+    assert view["returned_runs"] == 0
+
+
+def test_video_link_text_fallback_and_nondict_element():
+    # older runs store the URL in videos.text
+    assert fmt._video_link({"videos": {"text": "https://old.example/run"}}) == "https://old.example/run"
+    # a bare-string link element is used directly, not .get()'d
+    assert fmt._video_link({"videos": {"links": ["https://x.example/v"]}}) == "https://x.example/v"
+    # no video -> None, and run_entry drops the key
+    assert fmt._video_link({}) is None
+    assert "video" not in fmt.run_entry({"id": "r", "times": {"primary_t": 5.0}})
