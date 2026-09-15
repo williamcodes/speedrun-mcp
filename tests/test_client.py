@@ -32,12 +32,13 @@ async def test_api_key_header_and_flag():
         assert "x-api-key" not in c._http.headers
 
 
-async def test_auth_failure_raises_auth_error():
+@pytest.mark.parametrize("status", [401, 403])
+async def test_auth_failure_raises_auth_error(status):
     def handler(_request):
         return httpx.Response(
-            403,
+            status,
             json={
-                "status": 403,
+                "status": status,
                 "message": (
                     "This operations requires a user context, but no valid API "
                     "Key was submitted in your request."
@@ -49,6 +50,27 @@ async def test_auth_failure_raises_auth_error():
         with pytest.raises(AuthError) as excinfo:
             await c.get_profile()
     assert "user context" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "message"),
+    [
+        (401, AuthError, "speedrun.com rejected PUT /runs/r1/status"),
+        (403, AuthError, "speedrun.com rejected PUT /runs/r1/status"),
+        (404, NotFoundError, "Not found: /runs/r1/status"),
+        (500, SpeedrunError, "speedrun.com returned HTTP 500 for /runs/r1/status"),
+    ],
+)
+@pytest.mark.parametrize("content", [b"", b"<html>Unavailable</html>", b"[]"])
+async def test_http_errors_without_api_details(status, error, message, content):
+    async with SpeedrunClient(
+        transport=_transport(lambda _r: httpx.Response(status, content=content))
+    ) as c:
+        with pytest.raises(error, match=message) as excinfo:
+            await c.set_run_status("r1", "verified")
+
+    assert type(excinfo.value) is error
+    assert "speedrun.com says" not in str(excinfo.value)
 
 
 async def test_validation_errors_surface_field_reasons():
@@ -241,7 +263,7 @@ async def test_submit_run_requires_a_time():
     async with SpeedrunClient(
         api_key="k", transport=_transport(lambda _r: httpx.Response(201))
     ) as c:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="times needs at least one"):
             await c.submit_run(category="c", platform="p", times={})
 
 
@@ -249,7 +271,7 @@ async def test_reject_requires_a_reason():
     async with SpeedrunClient(
         api_key="k", transport=_transport(lambda _r: httpx.Response(200))
     ) as c:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Rejecting a run requires a non-empty reason"):
             await c.set_run_status("r1", "rejected")
 
 
@@ -258,7 +280,7 @@ async def test_submit_run_rejects_invalid_times():
         api_key="k", transport=_transport(lambda _r: httpx.Response(201))
     ) as c:
         for bad in (-1.0, 0.0, float("inf"), float("nan")):
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError, match="time 'realtime' must be a positive, finite"):
                 await c.submit_run(category="c", platform="p", times={"realtime": bad})
 
 
@@ -266,15 +288,15 @@ async def test_submit_run_rejects_blank_ids_bad_date_and_video():
     async with SpeedrunClient(
         api_key="k", transport=_transport(lambda _r: httpx.Response(201))
     ) as c:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="category must be a non-empty value"):
             await c.submit_run(category="   ", platform="p", times={"realtime": 1.0})
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="platform must be a non-empty value"):
             await c.submit_run(category="c", platform="", times={"realtime": 1.0})
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="date must be in YYYY-MM-DD form"):
             await c.submit_run(
                 category="c", platform="p", times={"realtime": 1.0}, date="01/02/2023"
             )
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"video must be an http\(s\) URL"):
             await c.submit_run(
                 category="c", platform="p", times={"realtime": 1.0}, video="not-a-url"
             )
@@ -284,7 +306,7 @@ async def test_reject_requires_a_nonblank_reason():
     async with SpeedrunClient(
         api_key="k", transport=_transport(lambda _r: httpx.Response(200))
     ) as c:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Rejecting a run requires a non-empty reason"):
             await c.set_run_status("r1", "rejected", reason="   ")
 
 
@@ -292,11 +314,11 @@ async def test_write_methods_reject_blank_run_id():
     async with SpeedrunClient(
         api_key="k", transport=_transport(lambda _r: httpx.Response(200))
     ) as c:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="run_id must be a non-empty value"):
             await c.delete_run("")
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="run_id must be a non-empty value"):
             await c.set_run_players("  ", [{"rel": "user", "id": "u1"}])
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="run_id must be a non-empty value"):
             await c.set_run_status("", "verified")
 
 

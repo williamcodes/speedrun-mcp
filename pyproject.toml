@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.8", "pre-commit>=3.5"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff==0.15.18", "mypy>=1.8", "pre-commit>=3.5"]
 
 [project.urls]
 Homepage = "https://github.com/williamcodes/speedrun-mcp"
@@ -43,10 +43,37 @@ markers = ["network: tests that hit the live speedrun.com API"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# Keep this version, the dev dependency, and .pre-commit-config.yaml in sync.
+required-version = "==0.15.18"
 
 [tool.ruff.lint]
-# pyflakes/pycodestyle (default) + import sorting, bugbear, pyupgrade, simplify.
-select = ["E", "F", "I", "B", "UP", "SIM"]
+select = [
+    "A",     # builtin shadowing
+    "ASYNC", # blocking calls and other async mistakes
+    "B",     # common bugs (flake8-bugbear)
+    "C4",    # unnecessary collection construction
+    "C90",   # function complexity
+    "E",     # pycodestyle errors
+    "F",     # Pyflakes
+    "I",     # import sorting
+    "PIE",   # redundant code
+    "PLE",   # Pylint errors
+    "PT",    # pytest practices
+    "RET",   # return statements
+    "RUF",   # Ruff-specific checks, including unused noqa directives
+    "S",     # security checks (flake8-bandit)
+    "SIM",   # simplification
+    "T10",   # debugger statements
+    "T20",   # print statements (stdout carries the MCP protocol)
+    "UP",    # syntax compatible with the minimum Python version
+    "W",     # pycodestyle warnings
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"] # pytest uses assert statements
 
 [tool.mypy]
 python_version = "3.10"

@@ -183,6 +183,21 @@ Keep the key out of version control — put it in your client config or a local,
 git-ignored `.env`, never in a committed file. All tools carry MCP read-only /
 destructive hints so clients can flag the write and moderation actions.
 
+### Local environment file
+
+Copy [.env.example](.env.example) to `.env` and fill in the settings you need.
+The template leaves the API key empty and disables writes. Git ignores `.env`.
+
+The server reads exported environment variables and does not load `.env`
+automatically. To load your local file and start the server from a shell:
+
+```bash
+set -a
+. ./.env
+set +a
+speedrun-mcp
+```
+
 ## Notes & limits
 
 - **Reads need no key; writes are opt-in.** Leaderboards, games, players and the
@@ -216,10 +231,31 @@ destructive hints so clients can flag the write and moderation actions.
 
 ```bash
 pip install -e ".[dev]"
-pytest -m "not network"   # unit tests (offline)
-pytest                    # include live-API tests
+pre-commit install
+
+# The checks run by CI:
 ruff check .
+ruff format --check .
+mypy
+pytest -m "not network"
+
+# Apply safe lint fixes and formatting locally:
+ruff check --fix .
+ruff format .
+
+# Optional: include live API tests.
+pytest
 ```
+
+Ruff checks source and tests for common bugs, security issues, async mistakes,
+overly complex functions, and pytest mistakes. It also sorts imports and formats
+Python code. Tests may use `assert`; the other lint rules apply to both source
+and tests. Print and debugger statements are rejected because the server uses
+stdout for the MCP protocol.
+
+Ruff is pinned to the same version in the dev dependencies, its `required-version`
+setting, and pre-commit. Update all three together. The hooks apply safe lint fixes
+and formatting before running mypy; CI checks without changing files.
 
 ## License
 

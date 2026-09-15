@@ -16,6 +16,7 @@ venv/
 # Secrets / local env (never commit your speedrun.com API key)
 .env
 .env.*
+!.env.example
 .speedrun-mcp-key
 
 # Editors / OS

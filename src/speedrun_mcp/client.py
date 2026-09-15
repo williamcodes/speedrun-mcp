@@ -113,37 +113,7 @@ class SpeedrunClient:
         except httpx.HTTPError as exc:  # network/DNS/timeout
             raise SpeedrunError(f"Network error talking to speedrun.com: {exc}") from exc
 
-        if resp.status_code == RATE_LIMIT_STATUS:
-            raise RateLimitError(
-                "speedrun.com rate limit hit (100 requests/minute). Wait a minute and retry."
-            )
-
-        if resp.status_code in (401, 403):
-            detail = self._error_message(resp)
-            # 403 covers both a missing/invalid key AND a valid key without
-            # permission (e.g. a non-moderator calling verify/reject), so don't
-            # assert the key is bad — the surfaced detail disambiguates.
-            msg = (
-                f"speedrun.com rejected {method} {path} (HTTP {resp.status_code}); "
-                "your API key may be missing, invalid, or lack permission for this action."
-            )
-            if detail:
-                msg = f"{msg} speedrun.com says: {detail}"
-            raise AuthError(msg)
-
-        if resp.status_code == 404:
-            detail = self._error_message(resp)
-            msg = f"Not found: {path} (check the id/abbreviation and any filters)."
-            if detail:
-                msg = f"{msg} speedrun.com says: {detail}"
-            raise NotFoundError(msg)
-
-        if resp.status_code >= 400:
-            detail = self._error_message(resp)
-            msg = f"speedrun.com returned HTTP {resp.status_code} for {path}."
-            if detail:
-                msg = f"{msg} speedrun.com says: {detail}"
-            raise SpeedrunError(msg)
+        self._raise_for_status(resp, method=method, path=path)
 
         if not resp.content:  # some write endpoints can answer with an empty body
             return None
@@ -153,6 +123,37 @@ class SpeedrunClient:
             raise SpeedrunError(
                 f"speedrun.com returned an unparseable response for {path}: {exc}"
             ) from exc
+
+    def _raise_for_status(self, resp: httpx.Response, *, method: str, path: str) -> None:
+        """Map HTTP failures to client errors, including any API validation details."""
+        if resp.status_code < 400:
+            return
+        if resp.status_code == RATE_LIMIT_STATUS:
+            raise RateLimitError(
+                "speedrun.com rate limit hit (100 requests/minute). Wait a minute and retry."
+            )
+
+        error: type[SpeedrunError]
+        if resp.status_code in (401, 403):
+            # 403 covers both a missing/invalid key AND a valid key without
+            # permission (e.g. a non-moderator calling verify/reject), so don't
+            # assert the key is bad — the surfaced detail disambiguates.
+            error = AuthError
+            msg = (
+                f"speedrun.com rejected {method} {path} (HTTP {resp.status_code}); "
+                "your API key may be missing, invalid, or lack permission for this action."
+            )
+        elif resp.status_code == 404:
+            error = NotFoundError
+            msg = f"Not found: {path} (check the id/abbreviation and any filters)."
+        else:
+            error = SpeedrunError
+            msg = f"speedrun.com returned HTTP {resp.status_code} for {path}."
+
+        detail = self._error_message(resp)
+        if detail:
+            msg = f"{msg} speedrun.com says: {detail}"
+        raise error(msg)
 
     async def _send(self, method: str, path: str, *, json: Any | None = None) -> Any:
         """Make a write request (POST/PUT/DELETE) and return the ``data`` payload."""
