@@ -17,8 +17,9 @@ classifiers = [
     "Topic :: Games/Entertainment",
 ]
 dependencies = [
-    # 1.6 is the first release with ToolAnnotations + @tool(annotations=...).
-    "mcp>=1.6.0",
+    # 1.6 introduced ToolAnnotations; this server uses the v1 FastMCP API.
+    # SDK v2 changes imports and model fields, so it needs a separate migration.
+    "mcp>=1.6.0,<2",
     "httpx>=0.27",
 ]
 
