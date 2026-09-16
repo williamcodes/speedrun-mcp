@@ -42,7 +42,7 @@ async def _fresh_client():
 
 
 async def test_search_games_finds_sm64():
-    games = await s.search_games("super mario 64", limit=5)
+    games = (await s.search_games("super mario 64", limit=5))["results"]
     assert any(g["id"] == SM64 for g in games)
 
 
@@ -92,7 +92,7 @@ async def test_personal_bests_resolve_player_names_not_ids():
 
 
 async def test_search_users_partial_match():
-    users = await s.search_users("sui", limit=20)
+    users = (await s.search_users("sui", limit=20))["results"]
     assert users, "partial search should return matches"
     # 'sui' is a substring (fuzzy 'name' query, not exact 'lookup')
     assert any("sui" in (u["name"] or "").lower() for u in users)
@@ -146,28 +146,28 @@ async def test_list_platforms_paginates_beyond_one_page():
 async def test_list_unverified_runs_is_public():
     # The moderation-queue read needs no API key; it should return run summaries
     # (or an empty list if the queue happens to be clear).
-    runs = await s.list_unverified_runs("sm64", limit=5)
+    runs = (await s.list_unverified_runs("sm64", limit=5))["results"]
     assert isinstance(runs, list)
     for r in runs:
         assert "run_id" in r
 
 
 async def test_search_series_finds_results():
-    series = await s.search_series("Mario", limit=10)
+    series = (await s.search_series("Mario", limit=10))["results"]
     assert series, "expected at least one series matching 'Mario'"
     assert all("id" in x for x in series)
 
 
 async def test_get_series_lists_its_games():
-    matches = await s.search_series("Super Mario", limit=1)
+    matches = (await s.search_series("Super Mario", limit=1))["results"]
     assert matches, "expected a 'Super Mario' series"
     detail = await s.get_series(matches[0]["id"])
     assert detail["id"] == matches[0]["id"]
-    assert isinstance(detail.get("games"), list)
+    assert isinstance(detail["games"]["results"], list)
 
 
 async def test_list_runs_filters_by_game_and_status():
-    runs = await s.list_runs(game=SM64, status="verified", limit=5)
+    runs = (await s.list_runs(game=SM64, status="verified", limit=5))["results"]
     assert runs, "sm64 should have verified runs"
     assert all(r.get("status") == "verified" for r in runs)
 
@@ -188,6 +188,6 @@ async def test_whoami_returns_the_keys_profile():
 
 
 @requires_api_key
-async def test_list_notifications_returns_list():
+async def test_list_notifications_returns_page():
     notes = await s.list_notifications(limit=5)
-    assert isinstance(notes, list)
+    assert isinstance(notes["results"], list)

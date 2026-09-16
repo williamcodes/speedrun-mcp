@@ -7,6 +7,7 @@ drop noise so a model gets the answer instead of the haystack.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 
@@ -67,6 +68,7 @@ def category_summary(cat: dict) -> dict:
         "type": cat.get("type"),  # "per-game" or "per-level"
         "miscellaneous": cat.get("miscellaneous"),
         "rules": (cat.get("rules") or "").strip() or None,
+        "players": cat.get("players"),
     }
 
 
@@ -84,6 +86,10 @@ def variable_summary(var: dict) -> dict:
         "category": var.get("category"),
         # map value-id -> label so a caller can pass var-<id>=<value-id> back in
         "values": {vid: (meta or {}).get("label") for vid, meta in values.items()},
+        "value_details": values,
+        "default": (var.get("values") or {}).get("default"),
+        "user_defined": var.get("user-defined"),
+        "obsoletes": var.get("obsoletes"),
     }
     # preserve the scoping level id when the scope carries one (e.g. single-level)
     if scope.get("level") is not None:
@@ -91,52 +97,70 @@ def variable_summary(var: dict) -> dict:
     return summary
 
 
+def _variable_metadata(variables: list[dict]) -> dict[str, dict]:
+    """Index usable variable summaries for both individual runs and leaderboards."""
+    return {var["id"]: variable_summary(var) for var in variables if var.get("id") is not None}
+
+
 def _player_name_map(players_block: Any) -> dict[str, str]:
     """Build {user_id: name} from an embedded players list."""
     data = players_block.get("data") if isinstance(players_block, dict) else players_block
     out: dict[str, str] = {}
     for p in data or []:
-        if p.get("id"):
-            out[p["id"]] = _intl_name(p) or p["id"]
+        name = _intl_name(p)
+        if p.get("id") and name:
+            out[p["id"]] = name
     return out
 
 
-def _resolve_players(run: dict, name_map: dict[str, str]) -> list[str]:
-    """Resolve a run's players to display names.
-
-    Handles all three shapes seen in the wild:
-      * leaderboard reference: ``[{"rel": "user", "id": ...}]`` (resolved via name_map)
-      * embedded block:        ``{"data": [<full user/guest>]}``
-      * guest:                 ``{"rel": "guest", "name": ...}``
-    """
+def _player_details(run: dict, name_map: dict[str, str]) -> list[dict]:
+    """Keep account ids and guest identity separate from display names."""
     players = run.get("players")
     # ``or []`` guards against an embedded block of the form {"data": null},
     # which the API can return for an unresolvable embed.
     items = (players.get("data") if isinstance(players, dict) else players) or []
-    names: list[str] = []
+    details = []
     for p in items:
-        if "names" in p:  # full embedded user object
-            names.append(_intl_name(p) or p.get("id", "?"))
-        elif p.get("rel") == "guest" or "name" in p:
-            names.append(p.get("name", "guest"))
-        elif p.get("id"):
-            names.append(name_map.get(p["id"], p["id"]))
-    return names
+        if p.get("rel") == "guest" or ("name" in p and not p.get("id")):
+            details.append({"type": "guest", "name": p.get("name", "guest")})
+        else:
+            user_id = p.get("id")
+            details.append(
+                {"type": "user", "id": user_id, "name": _intl_name(p) or name_map.get(user_id)}
+            )
+    return details
 
 
-def _video_link(run: dict) -> str | None:
+def _resolve_players(run: dict, name_map: dict[str, str]) -> list[str]:
+    """Display labels only; player_details carries the identity/provenance."""
+    return [p.get("name") or p.get("id") or "?" for p in _player_details(run, name_map)]
+
+
+def _video_links(run: dict) -> list[str]:
     videos = run.get("videos") or {}
-    links = videos.get("links")
-    if links and isinstance(links, list):
-        first = links[0]
-        uri = first.get("uri") if isinstance(first, dict) else first
+    urls = []
+    for link in videos.get("links") or []:
+        uri = link.get("uri") if isinstance(link, dict) else link
         if uri:
-            return uri
-    # Older runs store the URL in ``videos.text`` instead of a links list.
+            urls.append(uri)
+    # Keep prose separate; only use a legacy text field as a link if it is a URL.
     text = videos.get("text")
-    if text:
-        return text
-    return None
+    if not urls and isinstance(text, str) and text.startswith(("http://", "https://")):
+        urls.append(text)
+    return urls
+
+
+def _variable_values(values: dict, metadata: dict[str, dict]) -> dict:
+    """Resolve labels without discarding raw choices or treating every variable as a subcategory."""
+    return {
+        var_id: {
+            "name": metadata.get(var_id, {}).get("name"),
+            "value": value,
+            "label": metadata.get(var_id, {}).get("values", {}).get(value),
+            "is_subcategory": metadata.get(var_id, {}).get("is_subcategory"),
+        }
+        for var_id, value in values.items()
+    }
 
 
 def run_entry(
@@ -149,47 +173,54 @@ def run_entry(
 ) -> dict:
     """One leaderboard/PB row, flattened.
 
-    ``name_map`` resolves player ids -> names; ``variable_meta`` maps
-    {variable_id: {"name": str, "values": {value_id: label}}} so subcategory
-    choices show as readable ``{variable name: value label}`` pairs.
+    ``name_map`` resolves player ids to names; ``variable_meta`` maps variable
+    ids to summaries. Choices retain their ids, labels and subcategory flags.
 
-    ``timing`` selects which timing metric to display. When it is a non-empty
-    string the time is taken from ``times[f"{timing}_t"]`` (falling back to
-    ``times["primary_t"]`` when that value is missing/None/0, since unused
-    timings come back as 0). When ``timing`` is None the primary time is used.
-    This keeps displayed times in sync with the leaderboard's sort order.
+    A missing/zero requested timing is unavailable, never replaced with another
+    metric. The primary time is used only when no metric was requested.
     """
     times = run.get("times") or {}
-    primary_t = times.get("primary_t")
-    time_seconds = primary_t
-    if timing:
-        selected = times.get(f"{timing}_t")
-        if selected:  # non-None and non-zero
-            time_seconds = selected
+    time_source = f"{timing}_t" if timing else "primary_t"
+    time_seconds = times.get(time_source) or None
+    videos = _video_links(run)
+    game_id, _ = _id_and_name(run.get("game"))
+    category_id, _ = _id_and_name(run.get("category"))
+    variable_values = _variable_values(run.get("values") or {}, variable_meta or {})
     entry: dict[str, Any] = {
         "place": place,
         "players": _resolve_players(run, name_map or {}),
+        "player_details": _player_details(run, name_map or {}),
         "time": format_duration(time_seconds),
         "time_seconds": time_seconds,
         "date": run.get("date"),
-        "video": _video_link(run),
+        "timing": timing or "primary",
+        "time_source": f"times.{time_source}",
+        "time_available": time_seconds is not None,
+        "primary_time_seconds": times.get("primary_t"),
+        "video": videos[0] if videos else None,
+        "videos": videos,
+        "video_text": (run.get("videos") or {}).get("text"),
         "run_id": run.get("id"),
         "weblink": run.get("weblink"),
+        "game_id": game_id,
+        "category_id": category_id,
+        "values": run.get("values") or {},
+        "variables": variable_values,
+        "status": run.get("status"),
     }
-    if variable_meta:
-        subcats = {}
-        for var_id, value_id in (run.get("values") or {}).items():
-            meta = variable_meta.get(var_id)
-            if meta:
-                label = (meta.get("values") or {}).get(value_id)
-                if label:
-                    subcats[meta.get("name") or var_id] = label
-        if subcats:
-            entry["subcategories"] = subcats
+    subcats = {
+        var_id: detail
+        for var_id, detail in variable_values.items()
+        if detail["is_subcategory"] is True
+    }
+    if subcats:
+        entry["subcategories"] = subcats
     comment = (run.get("comment") or "").strip()
     if comment:
         entry["comment"] = comment
-    return {k: v for k, v in entry.items() if v is not None}
+    out = {k: v for k, v in entry.items() if v is not None}
+    out["level"] = run.get("level")
+    return out
 
 
 def _id_and_name(field: Any) -> tuple[str | None, str | None]:
@@ -201,15 +232,34 @@ def _id_and_name(field: Any) -> tuple[str | None, str | None]:
     return field, None
 
 
-def leaderboard_view(lb: dict, *, limit: int | None = None) -> dict:
+def run_detail(run: dict, variables: list[dict]) -> dict:
+    """A single run with its board identity, verification and submission context."""
+    out = run_entry(
+        run,
+        name_map=_player_name_map(run.get("players", {})),
+        variable_meta=_variable_metadata(variables),
+    )
+    game_id, game_name = _id_and_name(run.get("game"))
+    category_id, category_name = _id_and_name(run.get("category"))
+    out.update(
+        game_id=game_id,
+        game_name=game_name,
+        category_id=category_id,
+        category_name=category_name,
+        status=run.get("status"),
+        system=run.get("system"),
+        submitted=run.get("submitted"),
+        times=run.get("times"),
+    )
+    return out
+
+
+def leaderboard_view(
+    lb: dict, *, limit: int | None = None, requested_filters: dict | None = None
+) -> dict:
     """Flatten a leaderboard (optionally with embedded players/variables/category)."""
     name_map = _player_name_map(lb.get("players", {}))
-    variable_meta: dict[str, dict] = {}
-    for var in (lb.get("variables") or {}).get("data", []):
-        summary = variable_summary(var)
-        if summary["id"] is None:  # skip a malformed/partial embedded variable
-            continue
-        variable_meta[summary["id"]] = {"name": summary["name"], "values": summary["values"]}
+    variable_meta = _variable_metadata((lb.get("variables") or {}).get("data") or [])
 
     timing = lb.get("timing")
     rows = lb.get("runs") or []
@@ -229,17 +279,10 @@ def leaderboard_view(lb: dict, *, limit: int | None = None) -> dict:
     game_id, game_name = _id_and_name(lb.get("game"))
     category_id, category_name = _id_and_name(lb.get("category"))
 
-    # Resolve raw {variable_id: value_id} filters to readable {name: label},
-    # falling back to the raw id/value when the variable/value is unknown.
-    applied_filters: dict[str, str] = {}
-    for var_id, value_id in (lb.get("values") or {}).items():
-        meta = variable_meta.get(var_id)
-        if meta:
-            name = meta.get("name") or var_id
-            label = (meta.get("values") or {}).get(value_id) or value_id
-            applied_filters[name] = label
-        else:
-            applied_filters[var_id] = value_id
+    applied_filters = {
+        key: lb[key] for key in ("platform", "region", "emulators", "date") if key in lb
+    }
+    applied_filters["variables"] = _variable_values(lb.get("values") or {}, variable_meta)
 
     view = {
         "game_id": game_id,
@@ -249,8 +292,10 @@ def leaderboard_view(lb: dict, *, limit: int | None = None) -> dict:
         "level": lb.get("level"),
         "timing": timing,
         "applied_filters": applied_filters,
+        "requested_filters": {k: v for k, v in (requested_filters or {}).items() if v is not None},
         "weblink": lb.get("weblink"),
         "returned_runs": len(runs),
+        "omitted_from_response": max(0, len(lb.get("runs") or []) - len(runs)),
         "runs": runs,
     }
     return {k: v for k, v in view.items() if v is not None}
@@ -284,6 +329,7 @@ def notification_view(notif: dict) -> dict:
         "created": notif.get("created"),
         "text": notif.get("text"),
         "type": item.get("rel"),  # post | run | game | guide
+        "target_uri": item.get("uri"),
         "run": links.get("run"),
         "game": links.get("game"),
     }
@@ -308,10 +354,47 @@ def submission_result(run: dict | None, *, name_map: dict[str, str] | None = Non
         "examiner": status.get("examiner"),
         "reason": status.get("reason"),  # set on rejection
         "players": _resolve_players(run, name_map or {}),
+        "player_details": _player_details(run, name_map or {}),
         "game": run.get("game"),
         "category": run.get("category"),
         "time": format_duration(times.get("primary_t")),
         "date": run.get("date"),
         "submitted": run.get("submitted"),
+        "videos": _video_links(run),
+        "video_text": (run.get("videos") or {}).get("text"),
     }
     return {k: v for k, v in out.items() if v not in (None, [], "")}
+
+
+def collection_view(page: dict, formatter: Callable[[dict], dict]) -> dict:
+    """An explicit page envelope remains visible even when results are empty."""
+    notes = {
+        True: "The API advertises a next page; it may contain no matching results.",
+        False: "The API advertises no next page.",
+        None: "The API omitted pagination metadata; completeness is unknown.",
+    }
+    return {
+        "results": [formatter(item) for item in page["data"]],
+        "returned": len(page["data"]),
+        "offset": page["offset"],
+        "limit": page["limit"],
+        "has_more": page["has_more"],
+        "next_offset": page["next_offset"],
+        "pagination_note": notes[page["has_more"]],
+    }
+
+
+def notification_page(page: dict, *, limit: int, unread_only: bool) -> dict:
+    """Filter one fetched page and preserve a continuation before omitted matches."""
+    matches = [
+        (i, n) for i, n in enumerate(page["data"]) if not unread_only or n.get("status") == "unread"
+    ]
+    selected = matches[:limit]
+    view = collection_view({**page, "data": [n for _, n in selected]}, notification_view)
+    if len(matches) > limit:
+        view["has_more"] = True
+        view["next_offset"] = page["offset"] + selected[-1][0] + 1
+        view["pagination_note"] = (
+            "More matching notifications in the scanned page were omitted by limit."
+        )
+    return view

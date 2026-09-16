@@ -25,7 +25,7 @@ subcategory variables labeled).
 ## Example
 
 Ask *"the SM64 16-star world record?"* and the model calls `get_world_record`,
-which returns compact, resolved JSON:
+which returns resolved JSON. An excerpt:
 
 ```json
 {
@@ -68,6 +68,37 @@ subcategories) → `get_leaderboard` / `get_world_record`. Use `list_platforms` 
 
 With write tools enabled (see below), `submit_run`, `verify_run`, `reject_run`,
 `set_run_players` and `delete_run` are also available.
+
+### Result scope and provenance
+
+Search tools, `list_runs`, `list_unverified_runs`, and `list_notifications` return
+an object with `results`, `returned`, `offset`, `limit`, `has_more`, and
+`next_offset`. This replaces their earlier bare-list output. Pass `next_offset`
+as `offset` to continue with the same filters. `has_more: null` means the API
+omitted pagination metadata, so completeness is unknown. `get_series.games`
+uses the same envelope; continue with `game_offset`.
+`pagination_note` explains the continuation evidence: an API next-page link
+can lead to an empty page and does not establish a total result count.
+
+`get_game_records` follows all pages. Notifications scan up to `scan_limit`
+source records and report `scanned`; an empty unread result is not evidence of
+no unread notifications when `has_more` is true or unknown.
+
+Run rows preserve account/guest identity in `player_details`, all video links
+in `videos`, and separate source commentary in `video_text`. Personal-best rows
+include game/category IDs, level, and raw variable choices. Variable details and
+subcategory maps are keyed by variable ID to avoid collisions between names.
+
+Leaderboard `applied_filters` includes the API's system filters and resolved
+`variables`; `requested_filters` separately records the call's filters, including
+historical dates. A missing requested timing is marked unavailable rather than
+replaced by the primary time. Each displayed time identifies its source field.
+`returned_runs` and `omitted_from_response` count rows from the fetched response,
+not the full leaderboard.
+
+Write errors that leave completion uncertain explicitly warn against automatic
+retries. A success response that cannot be parsed preserves its HTTP status and
+resource location when supplied.
 
 ## Install & run
 
@@ -228,6 +259,19 @@ speedrun-mcp
   `personal_bests` list with game/category names and resolved players.
 
 ## Development
+
+The package uses a flat `src/speedrun_mcp/` layout:
+
+- `client.py` handles HTTP requests, API errors, and pagination.
+- `format.py` converts API payloads into tool results without network access.
+- `server.py` owns MCP tools, configuration, and the shared client's lifecycle.
+- `__main__.py` provides the `python -m speedrun_mcp` entry point.
+- `__init__.py` exposes `mcp` on demand, so importing the client or format helpers
+  does not initialize the server.
+
+Tests live in `tests/`. Unit tests cover each layer; package and MCP protocol
+tests cover imports and startup. `test_live.py` contains the live API checks,
+selected with the `network` marker.
 
 ```bash
 pip install -e ".[dev]"

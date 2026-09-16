@@ -10,9 +10,11 @@ Docs: https://github.com/speedruncomorg/api/tree/master/version1
 from __future__ import annotations
 
 import math
+import unicodedata
 from datetime import date as _date
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
@@ -49,10 +51,25 @@ class AuthError(SpeedrunError):
 
 
 def _require_nonblank(value: str, field: str) -> str:
-    """Reject an empty/whitespace required id locally (clearer than a remote 404)."""
+    """Reject an empty/whitespace required value before making an API request."""
     if not value or not value.strip():
         raise ValueError(f"{field} must be a non-empty value.")
     return value
+
+
+def _require_searchable_name(name: str) -> None:
+    """Do not let an ignored game/series query become an unfiltered collection."""
+    _require_nonblank(name, "name")
+    # The API searches Latin letters (including accents) and ASCII digits, but
+    # drops queries made solely of Japanese/Cyrillic text, symbols or punctuation.
+    if not any(
+        unicodedata.name(char, "").startswith("LATIN ") or "0" <= char <= "9" for char in name
+    ):
+        raise ValueError(
+            "name must contain a Latin letter or ASCII digit for speedrun.com search. "
+            "Use the international or romanized title; unsupported queries can return "
+            "an unfiltered list."
+        )
 
 
 class SpeedrunClient:
@@ -111,6 +128,12 @@ class SpeedrunClient:
         try:
             resp = await self._http.request(method, path, params=clean, json=json)
         except httpx.HTTPError as exc:  # network/DNS/timeout
+            if method != "GET":
+                raise SpeedrunError(
+                    f"Write outcome unknown for {method} {path}: {exc}. "
+                    "The action may have succeeded. Check current state before retrying; "
+                    "do not repeat the write automatically."
+                ) from exc
             raise SpeedrunError(f"Network error talking to speedrun.com: {exc}") from exc
 
         self._raise_for_status(resp, method=method, path=path)
@@ -120,6 +143,14 @@ class SpeedrunClient:
         try:
             return resp.json()
         except ValueError as exc:  # non-JSON / empty success body
+            if method != "GET":
+                location = resp.headers.get("Location")
+                raise SpeedrunError(
+                    f"speedrun.com acknowledged {method} {path} with HTTP {resp.status_code}, "
+                    "but its response could not be parsed. The action may have succeeded. "
+                    "Check current state before retrying; do not repeat the write automatically."
+                    + (f" Resource location: {location}" if location else "")
+                ) from exc
             raise SpeedrunError(
                 f"speedrun.com returned an unparseable response for {path}: {exc}"
             ) from exc
@@ -153,6 +184,11 @@ class SpeedrunClient:
         detail = self._error_message(resp)
         if detail:
             msg = f"{msg} speedrun.com says: {detail}"
+        if method != "GET" and resp.status_code >= 500:
+            msg += (
+                " Write outcome unknown. Check current state before retrying; "
+                "do not repeat the write automatically."
+            )
         raise error(msg)
 
     async def _send(self, method: str, path: str, *, json: Any | None = None) -> Any:
@@ -166,14 +202,41 @@ class SpeedrunClient:
         """GET a path and return the parsed ``data`` payload.
 
         speedrun.com wraps successful responses in ``{"data": ...}``; we unwrap
-        it so callers never have to. Pagination metadata is dropped on purpose —
-        for single-page tools that cap their own result counts. Use
-        :meth:`_get_paginated` for collections that may exceed one page.
+        it so callers never have to. Use :meth:`_get_page` for capped collections
+        or :meth:`_get_paginated` to consume a complete collection.
         """
         body = await self._request(path, params)
         if not isinstance(body, dict):
             return body
         return body.get("data", body)
+
+    async def _get_page(self, path: str, params: dict[str, Any]) -> dict:
+        """Preserve page boundaries without claiming a collection's total size."""
+        body = await self._request(path, params)
+        data = body["data"]
+        pagination = body.get("pagination")
+        offset = int((pagination or {}).get("offset", params.get("offset", 0)))
+        limit = int((pagination or {}).get("max", params.get("max", 20)))
+        links = (pagination or {}).get("links", [])
+        next_link = next((link for link in links if link.get("rel") == "next"), None)
+        has_more = bool(next_link) if pagination is not None else None
+        next_offset = None
+        if next_link is not None:
+            query = parse_qs(urlsplit(next_link.get("uri", "")).query)
+            next_offset = int(query.get("offset", [offset + len(data)])[0])
+            if next_offset <= offset:
+                raise SpeedrunError(
+                    f"Pagination did not advance for {path}; refusing to repeat a page."
+                )
+        elif has_more is None and data:
+            next_offset = offset + len(data)
+        return {
+            "data": data,
+            "offset": offset,
+            "limit": limit,
+            "has_more": has_more,
+            "next_offset": next_offset,
+        }
 
     async def _get_paginated(self, path: str, params: dict[str, Any] | None = None) -> list[dict]:
         """Fetch and concatenate ALL pages of a collection endpoint.
@@ -183,23 +246,22 @@ class SpeedrunClient:
         following the ``pagination.links`` ``next`` marker / incrementing offset.
         """
         merged = dict(params or {})
-        # The API hard-caps every page at 200. Clamp so the short-page break
-        # (len(data) < page_size) can't fire prematurely and truncate when a
-        # caller asks for max > 200.
+        # The API hard-caps every page at 200.
         page_size = min(int(merged.get("max") or 200), 200)
         merged["max"] = page_size
         collected: list[dict] = []
         offset = 0
         while True:
             merged["offset"] = offset
-            body = await self._request(path, merged)
-            data = body.get("data", []) if isinstance(body, dict) else (body or [])
-            collected.extend(data)
-            pagination = body.get("pagination", {}) if isinstance(body, dict) else {}
-            has_next = any(link.get("rel") == "next" for link in pagination.get("links", []))
-            if not has_next or len(data) < page_size:  # last (or short/empty) page
+            page = await self._get_page(path, merged)
+            collected.extend(page["data"])
+            if page["has_more"] is None:
+                raise SpeedrunError(
+                    f"Missing pagination metadata for {path}; completeness is unknown."
+                )
+            if not page["has_more"]:
                 break
-            offset += page_size
+            offset = page["next_offset"]
         return collected
 
     @staticmethod
@@ -229,22 +291,28 @@ class SpeedrunClient:
 
     # -- games ----------------------------------------------------------------
 
-    async def search_games(self, name: str, *, maximum: int = 10) -> list[dict]:
-        return await self._get("/games", {"name": name, "max": maximum})
+    async def search_games(self, name: str, *, maximum: int = 10, offset: int = 0) -> dict:
+        _require_searchable_name(name)
+        return await self._get_page("/games", {"name": name, "max": maximum, "offset": offset})
 
     async def get_game(self, game: str, *, embed: str | None = None) -> dict:
+        _require_nonblank(game, "game")
         return await self._get(f"/games/{game}", {"embed": embed})
 
     async def get_categories(self, game: str) -> list[dict]:
+        _require_nonblank(game, "game")
         return await self._get(f"/games/{game}/categories")
 
     async def get_levels(self, game: str) -> list[dict]:
+        _require_nonblank(game, "game")
         return await self._get(f"/games/{game}/levels")
 
     async def get_game_variables(self, game: str) -> list[dict]:
+        _require_nonblank(game, "game")
         return await self._get(f"/games/{game}/variables")
 
     async def get_category_variables(self, category: str) -> list[dict]:
+        _require_nonblank(category, "category")
         return await self._get(f"/categories/{category}/variables")
 
     async def get_game_records(
@@ -256,12 +324,13 @@ class SpeedrunClient:
         miscellaneous: bool | None = None,
         embed: str | None = None,
     ) -> list[dict]:
-        """A game's leaderboards in one call (GET /games/{id}/records).
+        """Fetch every page of a game's leaderboards (GET /games/{id}/records).
 
         ``top`` caps places per board (1 = world records only). ``scope`` is
         ``full-game`` / ``levels`` / ``all``.
         """
-        return await self._get(
+        _require_nonblank(game, "game")
+        return await self._get_paginated(
             f"/games/{game}/records",
             {"top": top, "scope": scope, "miscellaneous": miscellaneous, "embed": embed},
         )
@@ -283,7 +352,17 @@ class SpeedrunClient:
         date: str | None = None,
         embed: str | None = None,
     ) -> dict:
-        if level:
+        _require_nonblank(game, "game")
+        _require_nonblank(category, "category")
+        if date is not None:
+            try:
+                parsed_date = _date.fromisoformat(date)
+            except ValueError as exc:
+                raise ValueError(f"date must be in YYYY-MM-DD form, got {date!r}.") from exc
+            if parsed_date.isoformat() != date:
+                raise ValueError(f"date must be in YYYY-MM-DD form, got {date!r}.")
+        if level is not None:
+            _require_nonblank(level, "level")
             path = f"/leaderboards/{game}/level/{level}/{category}"
         else:
             path = f"/leaderboards/{game}/category/{category}"
@@ -298,21 +377,37 @@ class SpeedrunClient:
         }
         for var_id, value_id in (variables or {}).items():
             params[f"var-{var_id}"] = value_id
-        return await self._get(path, params)
+        leaderboard = await self._get(path, params)
+        applied = leaderboard.get("values") or {}
+        ignored = [
+            var_id
+            for var_id, value_id in (variables or {}).items()
+            if applied.get(var_id) != value_id
+        ]
+        if ignored:
+            raise ValueError(
+                "Leaderboard did not apply the requested variable filters: "
+                f"{', '.join(ignored)}. Use list_variables to find valid ids and values."
+            )
+        return leaderboard
 
     # -- users / runs ---------------------------------------------------------
 
-    async def search_users(self, name: str, *, maximum: int = 10) -> list[dict]:
+    async def search_users(self, name: str, *, maximum: int = 10, offset: int = 0) -> dict:
+        _require_nonblank(name, "name")
         # 'name' does fuzzy/partial matching; 'lookup' is exact-only.
-        return await self._get("/users", {"name": name, "max": maximum})
+        return await self._get_page("/users", {"name": name, "max": maximum, "offset": offset})
 
     async def get_user(self, user: str) -> dict:
+        _require_nonblank(user, "user")
         return await self._get(f"/users/{user}")
 
     async def get_user_personal_bests(self, user: str, *, embed: str | None = None) -> list[dict]:
+        _require_nonblank(user, "user")
         return await self._get(f"/users/{user}/personal-bests", {"embed": embed})
 
     async def get_run(self, run_id: str, *, embed: str | None = None) -> dict:
+        _require_nonblank(run_id, "run_id")
         return await self._get(f"/runs/{run_id}", {"embed": embed})
 
     # -- platforms / regions --------------------------------------------------
@@ -325,14 +420,17 @@ class SpeedrunClient:
 
     # -- series ---------------------------------------------------------------
 
-    async def search_series(self, name: str, *, maximum: int = 10) -> list[dict]:
-        return await self._get("/series", {"name": name, "max": maximum})
+    async def search_series(self, name: str, *, maximum: int = 10, offset: int = 0) -> dict:
+        _require_searchable_name(name)
+        return await self._get_page("/series", {"name": name, "max": maximum, "offset": offset})
 
     async def get_series(self, series: str) -> dict:
+        _require_nonblank(series, "series")
         return await self._get(f"/series/{series}")
 
-    async def get_series_games(self, series: str, *, maximum: int = 50) -> list[dict]:
-        return await self._get(f"/series/{series}/games", {"max": maximum})
+    async def get_series_games(self, series: str, *, maximum: int = 50, offset: int = 0) -> dict:
+        _require_nonblank(series, "series")
+        return await self._get_page(f"/series/{series}/games", {"max": maximum, "offset": offset})
 
     # -- authenticated: identity ----------------------------------------------
 
@@ -340,10 +438,13 @@ class SpeedrunClient:
         """The user that owns the API key (GET /profile). Requires auth."""
         return await self._get("/profile")
 
-    async def get_notifications(self, *, direction: str = "desc", maximum: int = 20) -> list[dict]:
+    async def get_notifications(
+        self, *, direction: str = "desc", maximum: int = 20, offset: int = 0
+    ) -> dict:
         """The authenticated user's notifications, newest first. Requires auth."""
-        return await self._get(
-            "/notifications", {"orderby": "created", "direction": direction, "max": maximum}
+        return await self._get_page(
+            "/notifications",
+            {"orderby": "created", "direction": direction, "max": maximum, "offset": offset},
         )
 
     # -- runs: moderation-queue read ------------------------------------------
@@ -362,25 +463,41 @@ class SpeedrunClient:
         direction: str | None = None,
         maximum: int = 20,
         embed: str | None = None,
-    ) -> list[dict]:
+        offset: int = 0,
+    ) -> dict:
         """List runs with filters (e.g. ``status='new'`` for the moderation queue,
         or ``user=...`` for a player's submissions).
 
         A public read — no API key required.
         """
-        return await self._get(
+        # Unlike resource paths, /runs query filters do not resolve names or
+        # abbreviations. Resolve every supplied reference, including id-shaped
+        # usernames, rather than guessing whether an eight-character string is an id.
+        references = {
+            "user": ("users", user),
+            "game": ("games", game),
+            "category": ("categories", category),
+            "level": ("levels", level),
+            "examiner": ("users", examiner),
+        }
+        for field, (_, value) in references.items():
+            if value is not None:
+                _require_nonblank(value, field)
+        filters = {}
+        for field, (resource, value) in references.items():
+            if value is not None:
+                record = await self._get(f"/{resource}/{value}")
+                filters[field] = record["id"]
+        return await self._get_page(
             "/runs",
             {
-                "user": user,
+                **filters,
                 "guest": guest,
                 "status": status,
-                "game": game,
-                "category": category,
-                "level": level,
-                "examiner": examiner,
                 "orderby": orderby,
                 "direction": direction,
                 "max": maximum,
+                "offset": offset,
                 "embed": embed,
             },
         )

@@ -46,7 +46,7 @@ jobs:
           python -m pip install dist/*.whl
           installed="$(python -c 'from importlib.metadata import version; print(version("speedrun-mcp"))')"
           echo "installed: $installed"
-          python -c "import speedrun_mcp"  # import the package
+          python -c "from speedrun_mcp import mcp"  # initialize the server from the wheel
           test "$installed" = "${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@v7
         with:

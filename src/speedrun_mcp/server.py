@@ -41,7 +41,9 @@ mcp = FastMCP(
         "Query speedrun.com: games, categories, leaderboards, world records, "
         "players and their personal bests. Resolve a game title to an id with "
         "search_games first, then use list_categories / list_variables to find "
-        "the category and subcategory filters a leaderboard needs."
+        "the category and subcategory filters a leaderboard needs. "
+        "Paged search/list results include results, has_more and next_offset; "
+        "continue with offset before treating a partial page as a complete collection."
     ),
     lifespan=_lifespan,
 )
@@ -135,15 +137,21 @@ def _auth_tool(**kwargs):
 
 @mcp.tool(annotations=_read_anno("Search games"))
 async def search_games(
-    name: Annotated[str, Field(description="Game title or partial title to search for.")],
+    name: Annotated[
+        str,
+        Field(description="Game title or partial title containing a Latin letter or ASCII digit."),
+    ],
     limit: Annotated[int, Field(ge=1, le=50, description="Max games to return.")] = 10,
-) -> list[dict]:
+    offset: Annotated[
+        int, Field(ge=0, description="Start offset; use next_offset to continue.")
+    ] = 0,
+) -> dict:
     """Fuzzy-search games by name. Returns ids, abbreviations and release years.
 
     Use the returned ``id`` (or ``abbreviation``) with the other tools.
     """
-    games = await _get_client().search_games(name, maximum=limit)
-    return [fmt.game_summary(g) for g in games]
+    games = await _get_client().search_games(name, maximum=limit, offset=offset)
+    return fmt.collection_view(games, fmt.game_summary)
 
 
 @mcp.tool(annotations=_read_anno("Get game"))
@@ -161,6 +169,9 @@ async def get_game(
     embed = "categories,levels" if include_levels else "categories"
     g = await _get_client().get_game(game, embed=embed)
     out = fmt.game_summary(g)
+    out["ruleset"] = g.get("ruleset")
+    out["platforms"] = g.get("platforms")
+    out["regions"] = g.get("regions")
     out["categories"] = [
         fmt.category_summary(c) for c in (g.get("categories") or {}).get("data", [])
     ]
@@ -198,7 +209,7 @@ async def list_variables(
 @mcp.tool(annotations=_read_anno("Get leaderboard"))
 async def get_leaderboard(
     game: Annotated[str, Field(description="Game id or abbreviation.")],
-    category: Annotated[str, Field(description="Category id or abbreviation.")],
+    category: Annotated[str, Field(description="Category id or URL slug (e.g. '120_Star').")],
     top: Annotated[int, Field(ge=1, le=200, description="Return the top N places.")] = 10,
     level: Annotated[
         str | None, Field(description="Level id for an individual-level (IL) leaderboard.")
@@ -238,13 +249,23 @@ async def get_leaderboard(
         date=date,
         embed="game,players,variables,category",
     )
-    return fmt.leaderboard_view(lb)
+    return fmt.leaderboard_view(
+        lb,
+        requested_filters={
+            "variables": variables,
+            "platform": platform,
+            "region": region,
+            "timing": timing,
+            "emulators": emulators,
+            "date": date,
+        },
+    )
 
 
 @mcp.tool(annotations=_read_anno("Get world record"))
 async def get_world_record(
     game: Annotated[str, Field(description="Game id or abbreviation.")],
-    category: Annotated[str, Field(description="Category id or abbreviation.")],
+    category: Annotated[str, Field(description="Category id or URL slug (e.g. '120_Star').")],
     level: Annotated[str | None, Field(description="Level id for an IL world record.")] = None,
     variables: Annotated[
         dict[str, str] | None,
@@ -266,7 +287,7 @@ async def get_world_record(
         variables=variables,
         embed="game,players,variables,category",
     )
-    view = fmt.leaderboard_view(lb)
+    view = fmt.leaderboard_view(lb, requested_filters={"variables": variables})
     runs = view.pop("runs", [])
     view["world_record"] = runs[0] if runs else None
     view["tied"] = [r for r in runs[1:] if r.get("place") == 1]
@@ -275,12 +296,15 @@ async def get_world_record(
 
 @mcp.tool(annotations=_read_anno("Search users"))
 async def search_users(
-    name: Annotated[str, Field(description="Username (or partial) to look up.")],
+    name: Annotated[str, Field(description="Username (or partial), at least 3 characters.")],
     limit: Annotated[int, Field(ge=1, le=50, description="Max users to return.")] = 10,
-) -> list[dict]:
+    offset: Annotated[
+        int, Field(ge=0, description="Start offset; use next_offset to continue.")
+    ] = 0,
+) -> dict:
     """Search for speedrun.com users by name. Returns ids, countries and signup dates."""
-    users = await _get_client().search_users(name, maximum=limit)
-    return [fmt.user_summary(u) for u in users]
+    users = await _get_client().search_users(name, maximum=limit, offset=offset)
+    return fmt.collection_view(users, fmt.user_summary)
 
 
 @mcp.tool(annotations=_read_anno("Get personal bests"))
@@ -303,6 +327,8 @@ async def get_user_personal_bests(
         row = fmt.run_entry(run, place=item.get("place"), name_map=name_map)
         row["game"] = game_name or game_id
         row["category"] = cat_name or cat_id
+        row["game_id"] = game_id or row.get("game_id")
+        row["category_id"] = cat_id or row.get("category_id")
         entries.append(row)
     return {
         "user": user,
@@ -316,10 +342,12 @@ async def get_user_personal_bests(
 async def get_run(
     run_id: Annotated[str, Field(description="The run's id.")],
 ) -> dict:
-    """Get the details of a single run: players, time, date, video and comment."""
-    run = await _get_client().get_run(run_id, embed="players")
-    name_map = fmt._player_name_map(run.get("players", {}))
-    return fmt.run_entry(run, name_map=name_map)
+    """Get a run's players, times, game/category, status, system and variable values."""
+    client = _get_client()
+    run = await client.get_run(run_id, embed="game,category,players")
+    game_id, _ = fmt._id_and_name(run.get("game"))
+    variables = await client.get_game_variables(game_id) if game_id and run.get("values") else []
+    return fmt.run_detail(run, variables)
 
 
 @mcp.tool(annotations=_read_anno("List platforms"))
@@ -346,16 +374,24 @@ async def list_regions() -> list[dict]:
 
 @mcp.tool(annotations=_read_anno("Search series"))
 async def search_series(
-    name: Annotated[str, Field(description="Series title or partial title to search for.")],
+    name: Annotated[
+        str,
+        Field(
+            description="Series title or partial title containing a Latin letter or ASCII digit."
+        ),
+    ],
     limit: Annotated[int, Field(ge=1, le=50, description="Max series to return.")] = 10,
-) -> list[dict]:
+    offset: Annotated[
+        int, Field(ge=0, description="Start offset; use next_offset to continue.")
+    ] = 0,
+) -> dict:
     """Fuzzy-search game series (e.g. 'Mario', 'Zelda') by name.
 
     A series groups related games; pass a returned id to ``get_series`` to list
     the games it contains.
     """
-    series = await _get_client().search_series(name, maximum=limit)
-    return [fmt.series_summary(s) for s in series]
+    series = await _get_client().search_series(name, maximum=limit, offset=offset)
+    return fmt.collection_view(series, fmt.series_summary)
 
 
 @mcp.tool(annotations=_read_anno("Get series"))
@@ -363,6 +399,7 @@ async def get_series(
     series: Annotated[str, Field(description="Series id or abbreviation.")],
     include_games: Annotated[bool, Field(description="Also list the games in the series.")] = True,
     game_limit: Annotated[int, Field(ge=1, le=200, description="Max games to list.")] = 50,
+    game_offset: Annotated[int, Field(ge=0, description="Start offset for the games page.")] = 0,
 ) -> dict:
     """Get a series' details and (by default) the games it contains.
 
@@ -375,10 +412,10 @@ async def get_series(
     # The two calls are independent — fetch them concurrently.
     info, games = await asyncio.gather(
         client.get_series(series),
-        client.get_series_games(series, maximum=game_limit),
+        client.get_series_games(series, maximum=game_limit, offset=game_offset),
     )
     out = fmt.series_summary(info)
-    out["games"] = [fmt.game_summary(g) for g in games]
+    out["games"] = fmt.collection_view(games, fmt.game_summary)
     return out
 
 
@@ -393,10 +430,13 @@ async def list_runs(
         str | None, Field(description="Filter by status: 'new', 'verified', or 'rejected'.")
     ] = None,
     examiner: Annotated[
-        str | None, Field(description="Filter to runs examined by this user id.")
+        str | None, Field(description="Filter to runs examined by this user id or username.")
     ] = None,
     limit: Annotated[int, Field(ge=1, le=200, description="Max runs to return.")] = 20,
-) -> list[dict]:
+    offset: Annotated[
+        int, Field(ge=0, description="Start offset; use next_offset to continue.")
+    ] = 0,
+) -> dict:
     """List runs with filters — e.g. a player's recent submissions, or a game's
     verified/rejected runs. Newest first; combine filters to narrow down.
 
@@ -412,8 +452,9 @@ async def list_runs(
         direction="desc",
         maximum=limit,
         embed="players",
+        offset=offset,
     )
-    return [fmt.submission_result(r) for r in runs]
+    return fmt.collection_view(runs, fmt.submission_result)
 
 
 @mcp.tool(annotations=_read_anno("Get game records"))
@@ -465,25 +506,52 @@ async def whoami() -> dict:
 async def list_notifications(
     limit: Annotated[int, Field(ge=1, le=100, description="Max notifications to return.")] = 20,
     unread_only: Annotated[bool, Field(description="Only return unread notifications.")] = False,
-) -> list[dict]:
+    offset: Annotated[
+        int, Field(ge=0, description="Start offset; use next_offset to continue.")
+    ] = 0,
+    scan_limit: Annotated[
+        int, Field(ge=100, le=2000, description="Max source notifications to scan.")
+    ] = 1000,
+) -> dict:
     """List the authenticated user's notifications, newest first.
 
-    Requires ``SPEEDRUN_API_KEY``.
+    Requires ``SPEEDRUN_API_KEY``. Scans pages until enough matches are found,
+    the source is exhausted, or ``scan_limit`` is reached. An empty page with
+    ``has_more`` true/unknown does not establish that no unread notifications exist.
     """
-    # Bound the fetch to what we need, with headroom when filtering to unread so
-    # the single-page filter is less likely to under-return.
-    fetch = min(100, max(limit * 5, 20)) if unread_only else limit
-    notifs = await _require_auth().get_notifications(maximum=fetch)
-    if unread_only:
-        notifs = [n for n in notifs if n.get("status") == "unread"]
-    return [fmt.notification_view(n) for n in notifs[:limit]]
+    client = _require_auth()
+    results: list[dict] = []
+    scanned = 0
+    cursor = offset
+    while True:
+        fetch = min(100 if unread_only else limit, scan_limit - scanned)
+        page = await client.get_notifications(maximum=fetch, offset=cursor)
+        view = fmt.notification_page(page, limit=limit - len(results), unread_only=unread_only)
+        results.extend(view["results"])
+        scanned += len(page["data"])
+        if len(results) >= limit or view["has_more"] is not True or scanned >= scan_limit:
+            break
+        cursor = view["next_offset"]
+    return {
+        **view,
+        "results": results,
+        "returned": len(results),
+        "offset": offset,
+        "limit": limit,
+        "scanned": scanned,
+        "scan_limit": scan_limit,
+        "unread_only": unread_only,
+    }
 
 
 @mcp.tool(annotations=_read_anno("List unverified runs"))
 async def list_unverified_runs(
     game: Annotated[str, Field(description="Game id or abbreviation.")],
     limit: Annotated[int, Field(ge=1, le=200, description="Max runs to return.")] = 20,
-) -> list[dict]:
+    offset: Annotated[
+        int, Field(ge=0, description="Start offset; use next_offset to continue.")
+    ] = 0,
+) -> dict:
     """List a game's runs awaiting verification — the moderation queue.
 
     A public read (no API key needed). Pair with ``verify_run`` / ``reject_run``
@@ -496,8 +564,9 @@ async def list_unverified_runs(
         direction="desc",
         maximum=limit,
         embed="players",
+        offset=offset,
     )
-    return [fmt.submission_result(r) for r in runs]
+    return fmt.collection_view(runs, fmt.submission_result)
 
 
 # -- authenticated: run submission & moderation -------------------------------
