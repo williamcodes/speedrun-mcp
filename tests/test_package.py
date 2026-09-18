@@ -66,3 +66,23 @@ def test_unknown_package_attribute_raises_attribute_error():
         assert "speedrun_mcp.server" not in sys.modules
         """
     )
+
+
+def test_release_metadata_versions_agree():
+    """pyproject.toml, server.json (MCP registry) and manifest.json (MCPB) must
+    carry the same version, since the release workflow publishes all three."""
+    import json
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    # A regex rather than tomllib, which only ships with Python 3.11+.
+    match = re.search(r'^version = "([^"]+)"', (root / "pyproject.toml").read_text(), re.M)
+    assert match, "pyproject.toml has no version"
+    pyproject = match.group(1)
+    server = json.loads((root / "server.json").read_text())
+    manifest = json.loads((root / "manifest.json").read_text())
+
+    assert server["version"] == pyproject
+    assert all(p["version"] == pyproject for p in server["packages"])
+    assert manifest["version"] == pyproject

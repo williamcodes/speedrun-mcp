@@ -1,0 +1,29 @@
+# Only the package source, pyproject.toml, manifest.json, README and LICENSE
+# belong in the bundle. The host installs dependencies from pyproject.toml via
+# uv, so no virtualenv or vendored packages are shipped.
+.git/
+.github/
+.venv/
+venv/
+dist/
+build/
+tests/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pre-commit-config.yaml
+.tool-versions
+.env
+.env.*
+.speedrun-mcp-key
+uv.lock
+server.json
+glama.json
+.mcpbignore
+*.mcpb
+.DS_Store
+.idea/
+.vscode/

@@ -1,35 +1,47 @@
-name: Publish to PyPI
+name: Publish release
 
-# Publishes to PyPI when a GitHub Release is published. Uses PyPI Trusted
-# Publishing (OIDC) — no API token/secret is stored anywhere. Configure the
-# trusted publisher once at https://pypi.org/manage/account/publishing/ with:
-#   project: speedrun-mcp · owner: williamcodes · repo: speedrun-mcp
-#   workflow: publish.yml
+# Runs when a GitHub Release is published. In order:
+#   1. the full CI suite (lint, types, tests, bundle validation)
+#   2. the release tag must match the version in pyproject.toml, server.json
+#      and manifest.json
+#   3. build the wheel/sdist and the Claude Desktop .mcpb bundle; smoke-test
+#      the wheel
+#   4. publish to PyPI via Trusted Publishing (OIDC; no stored token). Set it up
+#      once at https://pypi.org/manage/account/publishing/ with
+#      project: speedrun-mcp · owner: williamcodes · repo: speedrun-mcp ·
+#      workflow: publish.yml
+#   5. attach the .mcpb bundle to the GitHub release
+#   6. publish the version to the MCP registry, listing the PyPI package and
+#      the bundle. Auth is GitHub OIDC (the io.github.williamcodes namespace);
+#      PyPI ownership is verified through the mcp-name comment in README.md.
 #
-# A release only publishes if the full CI suite passes AND the release tag
-# matches pyproject's version AND the built wheel installs and reports that
-# version — so a broken or mis-tagged release can't reach PyPI.
+# Any failing step stops the chain, so a broken or mis-tagged release can't
+# reach PyPI or the registry.
 on:
   release:
     types: [published]
 
 jobs:
   ci:
-    uses: ./.github/workflows/ci.yml # lint + format + mypy + tests (3.10–3.13)
+    uses: ./.github/workflows/ci.yml
 
   verify-version:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Assert the release tag matches pyproject version
+      - name: Assert the release tag matches every version field
         run: |
           tag="${GITHUB_REF_NAME#v}"  # v0.3.1 -> 0.3.1
-          ver="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
-          echo "release tag: $tag | pyproject version: $ver"
-          if [ "$tag" != "$ver" ]; then
-            echo "::error::Release tag ($tag) does not match pyproject version ($ver)"
-            exit 1
-          fi
+          py="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')"
+          srv="$(jq -r .version server.json)"
+          man="$(jq -r .version manifest.json)"
+          echo "tag: $tag | pyproject: $py | server.json: $srv | manifest.json: $man"
+          for v in "$py" "$srv" "$man"; do
+            if [ "$tag" != "$v" ]; then
+              echo "::error::Release tag ($tag) does not match a version field ($v)"
+              exit 1
+            fi
+          done
 
   build:
     needs: [ci, verify-version]
@@ -39,6 +51,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
       - run: python -m pip install --upgrade build
       - run: python -m build
       - name: Smoke-test the built wheel
@@ -48,19 +63,84 @@ jobs:
           echo "installed: $installed"
           python -c "from speedrun_mcp import mcp"  # initialize the server from the wheel
           test "$installed" = "${GITHUB_REF_NAME#v}"
+      - name: Build the Claude Desktop bundle
+        run: |
+          mkdir -p bundle
+          npx -y @anthropic-ai/mcpb@latest pack . "bundle/speedrun-mcp-${GITHUB_REF_NAME#v}.mcpb"
       - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle
+          path: bundle/
 
-  publish:
+  publish-pypi:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # required for OIDC trusted publishing
+      id-token: write # OIDC trusted publishing
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  attach-bundle:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload a release asset
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: bundle
+          path: bundle/
+      - name: Attach the .mcpb bundle to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" bundle/*.mcpb --clobber --repo "$GITHUB_REPOSITORY"
+
+  publish-registry:
+    needs: [publish-pypi, attach-bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC login to the MCP registry
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: bundle
+          path: bundle/
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Wait for PyPI to serve the new version
+        # The registry validates the PyPI package (and its mcp-name marker), so
+        # the index must already have it. It usually does within seconds.
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 30); do
+            if curl -fsS "https://pypi.org/pypi/speedrun-mcp/$ver/json" > /dev/null; then
+              echo "PyPI has speedrun-mcp $ver"; exit 0
+            fi
+            echo "attempt $i: not yet"; sleep 10
+          done
+          echo "::error::PyPI never served speedrun-mcp $ver"; exit 1
+      - name: Add the bundle to server.json
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          file="bundle/speedrun-mcp-$ver.mcpb"
+          sha="$(sha256sum "$file" | cut -d' ' -f1)"
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/speedrun-mcp-$ver.mcpb"
+          jq --arg url "$url" --arg sha "$sha" \
+            '.packages += [{"registryType": "mcpb", "identifier": $url, "fileSha256": $sha, "transport": {"type": "stdio"}}]' \
+            server.json > server.tmp && mv server.tmp server.json
+          cat server.json
+      - name: Log in to the MCP registry
+        run: ./mcp-publisher login github-oidc
+      - name: Publish to the MCP registry
+        run: ./mcp-publisher publish

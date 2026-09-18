@@ -1,7 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.williamcodes/speedrun-mcp",
-  "description": "Query speedrun.com games, leaderboards, records, players, and personal bests. No API key needed.",
+  "title": "speedrun.com",
+  "description": "speedrun.com records, leaderboards (subcategories, ILs), players, PBs, moderation. No key needed.",
+  "websiteUrl": "https://github.com/williamcodes/speedrun-mcp#readme",
   "repository": {
     "url": "https://github.com/williamcodes/speedrun-mcp",
     "source": "github"

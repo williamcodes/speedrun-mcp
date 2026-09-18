@@ -32,3 +32,15 @@ jobs:
         # The `network` tests hit the live speedrun.com API; skip them in CI to
         # keep runs deterministic and avoid the 100 req/min rate limit.
         run: pytest -m "not network" -q
+
+  bundle:
+    # The Claude Desktop extension: validate the manifest and make sure the
+    # bundle packs (the release workflow attaches it to each release).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+      - run: npx -y @anthropic-ai/mcpb@latest validate manifest.json
+      - run: npx -y @anthropic-ai/mcpb@latest pack . speedrun-mcp.mcpb

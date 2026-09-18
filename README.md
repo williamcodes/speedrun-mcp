@@ -150,6 +150,15 @@ claude mcp add speedrun \
   -- speedrun-mcp
 ```
 
+### One-click install in Claude Desktop
+
+Each [GitHub release](https://github.com/williamcodes/speedrun-mcp/releases)
+ships a `speedrun-mcp-<version>.mcpb` bundle. Download it and open it with
+Claude Desktop (double-click, or Settings → Extensions → Install from file).
+Claude Desktop installs Python and the dependencies itself; nothing else is
+needed. The extension settings expose the optional API key and the writes
+toggle described below.
+
 ## Authenticated features
 
 **An API key is entirely optional.** With no key, the server exposes only the
@@ -289,7 +298,22 @@ ruff format .
 
 # Optional: include live API tests.
 pytest
+
+# Build the Claude Desktop bundle (needs Node for npx):
+npx -y @anthropic-ai/mcpb validate manifest.json
+npx -y @anthropic-ai/mcpb pack . speedrun-mcp.mcpb
 ```
+
+### Releasing
+
+Bump the version in `pyproject.toml`, `server.json` and `manifest.json` (a test
+checks they agree), tag `v<version>`, and publish a GitHub release. The release
+workflow then runs CI, publishes the wheel to PyPI, attaches the `.mcpb` bundle
+to the release, and publishes the new version to the
+[MCP registry](https://registry.modelcontextprotocol.io) with both the PyPI
+package and the bundle listed. Registry auth uses GitHub OIDC, so no token is
+stored; PyPI verifies ownership through the `mcp-name` comment at the top of
+this README.
 
 Ruff checks source and tests for common bugs, security issues, async mistakes,
 overly complex functions, and pytest mistakes. It also sorts imports and formats
