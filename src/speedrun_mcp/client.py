@@ -19,6 +19,9 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 
 API_BASE = "https://www.speedrun.com/api/v1"
+# The site's own (undocumented, unversioned) API. Used for one read only: the
+# public supporter flag, which v1 does not expose.
+V2_BASE = "https://www.speedrun.com/api/v2"
 
 try:
     _VERSION = version("speedrun-mcp")
@@ -118,17 +121,21 @@ class SpeedrunClient:
         *,
         method: str = "GET",
         json: Any | None = None,
+        read: bool | None = None,
     ) -> Any:
         """Send a request and return the full parsed JSON body (incl. pagination).
 
         GET by default; pass ``method`` / ``json`` for the authenticated write
-        endpoints (POST/PUT/DELETE).
+        endpoints (POST/PUT/DELETE). ``read=True`` marks a non-GET request that
+        only reads (the v2 API is POST-only), so a failure is reported as a plain
+        read error rather than a write with an unknown outcome.
         """
+        write = (method != "GET") if read is None else not read
         clean = {k: v for k, v in (params or {}).items() if v is not None}
         try:
             resp = await self._http.request(method, path, params=clean, json=json)
         except httpx.HTTPError as exc:  # network/DNS/timeout
-            if method != "GET":
+            if write:
                 raise SpeedrunError(
                     f"Write outcome unknown for {method} {path}: {exc}. "
                     "The action may have succeeded. Check current state before retrying; "
@@ -143,7 +150,7 @@ class SpeedrunClient:
         try:
             return resp.json()
         except ValueError as exc:  # non-JSON / empty success body
-            if method != "GET":
+            if write:
                 location = resp.headers.get("Location")
                 raise SpeedrunError(
                     f"speedrun.com acknowledged {method} {path} with HTTP {resp.status_code}, "
@@ -437,6 +444,26 @@ class SpeedrunClient:
     async def get_profile(self) -> dict:
         """The user that owns the API key (GET /profile). Requires auth."""
         return await self._get("/profile")
+
+    async def get_user_summary(self, url_slug: str) -> dict:
+        """A user's public profile summary from the site's v2 API.
+
+        ``POST /api/v2/GetUserSummary {"url": <username slug>}``. No auth. The
+        response's ``user.isSupporter`` is ``true`` for speedrun.com Supporters
+        and absent otherwise; v1 has no equivalent. v2 is undocumented, so
+        callers should treat failures as "unknown", not as "no".
+        """
+        _require_nonblank(url_slug, "url_slug")
+        body = await self._request(
+            f"{V2_BASE}/GetUserSummary", method="POST", json={"url": url_slug}, read=True
+        )
+        return body if isinstance(body, dict) else {}
+
+    async def is_supporter(self, url_slug: str) -> bool:
+        """Whether a user (by username slug) is a paying speedrun.com Supporter."""
+        summary = await self.get_user_summary(url_slug)
+        user = summary.get("user") or {}
+        return user.get("isSupporter") is True
 
     async def get_notifications(
         self, *, direction: str = "desc", maximum: int = 20, offset: int = 0

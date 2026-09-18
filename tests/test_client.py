@@ -584,3 +584,41 @@ async def test_write_server_error_warns_that_outcome_is_unknown():
     async with SpeedrunClient(transport=_transport(lambda _: httpx.Response(503))) as client:
         with pytest.raises(SpeedrunError, match="Write outcome unknown"):
             await client._request("/runs", method="POST")
+
+
+async def test_get_user_summary_posts_to_v2_and_reads_supporter_flag():
+    seen = {}
+
+    def handler(request):
+        seen["method"] = request.method
+        seen["url"] = str(request.url)
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"user": {"id": "u", "isSupporter": True}})
+
+    async with SpeedrunClient(transport=httpx.MockTransport(handler)) as c:
+        assert await c.is_supporter("Weegee") is True
+    assert seen == {
+        "method": "POST",
+        "url": "https://www.speedrun.com/api/v2/GetUserSummary",
+        "body": {"url": "Weegee"},
+    }
+
+
+async def test_is_supporter_false_when_flag_absent_and_blank_slug_rejected():
+    def handler(request):
+        return httpx.Response(200, json={"user": {"id": "u"}})
+
+    async with SpeedrunClient(transport=httpx.MockTransport(handler)) as c:
+        assert await c.is_supporter("suigi") is False
+        with pytest.raises(ValueError, match="url_slug"):
+            await c.is_supporter("  ")
+
+
+async def test_v2_read_failure_is_reported_as_a_read_not_an_unknown_write():
+    def handler(request):
+        raise httpx.ConnectError("down")
+
+    async with SpeedrunClient(transport=httpx.MockTransport(handler)) as c:
+        with pytest.raises(SpeedrunError, match="Network error") as exc:
+            await c.get_user_summary("x")
+    assert "unknown" not in str(exc.value)

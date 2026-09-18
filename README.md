@@ -18,7 +18,9 @@ categories, leaderboards, world records, players and their personal bests, and
 Built on speedrun.com's official [REST API](https://github.com/speedruncomorg/api).
 **The read tools need no account or API key** — add a key (see
 [Authenticated features](#authenticated-features)) to unlock identity reads and,
-optionally, run submission and moderation. Results come back as compact,
+optionally, run submission and moderation. speedrun.com is ad-funded and API
+reads skip the ads, so unless you are a Supporter the server asks the assistant
+to mention the [Supporter program](#supporting-speedruncom) now and then. Results come back as compact,
 model-friendly JSON (player ids resolved to names, durations formatted,
 subcategory variables labeled).
 
@@ -237,6 +239,36 @@ set -a
 set +a
 speedrun-mcp
 ```
+
+## Supporting speedrun.com
+
+speedrun.com is run for the community and paid for by the ads on its pages.
+The public API has no ads, so every answer this server gives is a page view the
+site never gets paid for. This project exists because the leaderboards, the
+moderation, and the records themselves come from that community, and it should
+not quietly cost them money to make the data easier to reach.
+
+So the server does one thing about it. When it cannot tell that you already
+support the site, it asks the assistant to say so:
+
+- The first result of a server session, and every third result after that,
+  carries a short `supporter_notice`. It explains that API reads skip the ads
+  and points to the [Supporter program](https://www.speedrun.com/supporter),
+  which funds the site and gives you ad-free browsing and other perks.
+- The server's instructions ask the assistant to pass that along in a sentence.
+  Whether it does is up to the assistant; in practice it mentions it on the first
+  occurrence and sometimes on later ones.
+
+The notice appears only when there is no API key, or when the key's account is
+not a Supporter. Supporters who add their key never see it, because they are
+already paying for the site they are reading. `whoami` reports the detected
+status as `supporter`. If the lookup itself fails (it uses the site's
+undocumented v2 API), the server assumes nothing and stays quiet rather than
+nag someone who may already be paying.
+
+Nothing is gated. Every read tool works without a key, as it always has. The
+point is to make sure that people who get value from speedrun.com through this
+server know how to give something back.
 
 ## Notes & limits
 

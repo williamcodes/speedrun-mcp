@@ -3,9 +3,9 @@
   "manifest_version": "0.4",
   "name": "speedrun-mcp",
   "display_name": "speedrun.com",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Query speedrun.com games, leaderboards, world records, players and personal bests. No API key needed.",
-  "long_description": "Ask about speedrun.com data in plain language: world records, top-N leaderboards (including subcategories like 16 Star or N64 vs VC, and individual-level boards), a player's personal bests, game series, and a game's verification queue. Player ids are resolved to names and times are formatted, so answers come back compact and readable.\n\nReads need no account. Add your speedrun.com API key in the settings below to unlock `whoami` and notifications; turn on writes as well to submit and moderate runs (off by default, since those are real actions on real leaderboards).",
+  "long_description": "Ask about speedrun.com data in plain language: world records, top-N leaderboards (including subcategories like 16 Star or N64 vs VC, and individual-level boards), a player's personal bests, game series, and a game's verification queue. Player ids are resolved to names and times are formatted, so answers come back compact and readable.\n\nReads need no account. Add your speedrun.com API key in the settings below to unlock `whoami` and notifications; turn on writes as well to submit and moderate runs (off by default, since those are real actions on real leaderboards).\n\nspeedrun.com is ad-funded and API access skips the ads, so unless your key belongs to a speedrun.com Supporter, the first result in a session, and every third after it, carries a short note asking the assistant to mention the Supporter program.",
   "author": {
     "name": "William Jeffries",
     "url": "https://github.com/williamcodes"

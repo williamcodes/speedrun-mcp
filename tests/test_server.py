@@ -570,3 +570,134 @@ async def test_record_tool_returns_boards_from_all_pages(mock_api):
         out = await s.get_game_records("g1", include_levels=True)
     assert out["returned_boards"] == 2
     assert [b["category_id"] for b in out["records"]] == ["c0", "c1"]
+
+
+# -- supporter notice ------------------------------------------------------------
+
+
+def _v2_aware(handler, *, supporter, fail=False):
+    """A transport that answers /profile and the v2 supporter lookup, then defers."""
+
+    def route(request):
+        if request.url.path == "/api/v1/profile":
+            return httpx.Response(
+                200,
+                json={"data": {"id": "8rrvlww8", "weblink": "https://www.speedrun.com/users/wm"}},
+            )
+        if request.url.path == "/api/v2/GetUserSummary":
+            assert request.method == "POST"
+            assert json.loads(request.content) == {"url": "wm"}
+            if fail:
+                return httpx.Response(500, text="nope")
+            user = {"id": "8rrvlww8", "name": "wm"}
+            if supporter:
+                user["isSupporter"] = True
+            return httpx.Response(200, json={"user": user})
+        return handler(request)
+
+    return route
+
+
+def _games_page(request):
+    assert request.url.path == "/api/v1/games"
+    return httpx.Response(200, json={"data": [{"id": "g1", "names": {"international": "G"}}]})
+
+
+def _platforms(request):
+    assert request.url.path == "/api/v1/platforms"
+    return httpx.Response(200, json={"data": [{"id": "p1", "name": "N64"}], "pagination": {}})
+
+
+async def test_notice_on_first_call_then_every_third_without_a_key(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return _games_page(request) if request.url.path == "/api/v1/games" else _platforms(request)
+
+    client = SpeedrunClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(s, "_client", client)
+    s._supporter_checked = False
+    async with client:
+        results = [await s.search_games("g") for _ in range(7)]
+        platforms = await s.list_platforms()
+
+    # first call, then every third: calls 1, 4 and 7
+    flagged = [i + 1 for i, r in enumerate(results) if "supporter_notice" in r]
+    assert flagged == [1, 4, 7]
+    assert results[0]["supporter_notice"] == s.SUPPORTER_NOTICE
+    assert next(iter(results[0])) == "supporter_notice"  # leads the result
+    assert s.SUPPORTER_URL in results[0]["supporter_notice"]
+    assert isinstance(platforms, list)  # list results are never reshaped
+    assert "/api/v2/GetUserSummary" not in calls  # no key, no lookup
+
+
+async def test_supporter_with_key_sees_no_notice_and_whoami_reports_it(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return _games_page(request)
+
+    client = SpeedrunClient(
+        api_key="k", transport=httpx.MockTransport(_v2_aware(handler, supporter=True))
+    )
+    monkeypatch.setattr(s, "_client", client)
+    s._supporter_checked = False
+    async with client:
+        result = await s.search_games("g")
+        again = await s.search_games("g")
+        who = await s.whoami()
+
+    assert "supporter_notice" not in result
+    assert "supporter_notice" not in again
+    assert who["supporter"] is True
+    assert calls.count("/api/v1/games") == 2  # the lookup itself is not routed here
+
+
+async def test_key_holder_who_is_not_a_supporter_gets_the_notice(monkeypatch):
+    client = SpeedrunClient(
+        api_key="k", transport=httpx.MockTransport(_v2_aware(_games_page, supporter=False))
+    )
+    monkeypatch.setattr(s, "_client", client)
+    s._supporter_checked = False
+    async with client:
+        result = await s.search_games("g")
+        who = await s.whoami()
+
+    assert result["supporter_notice"] == s.SUPPORTER_NOTICE
+    assert who["supporter"] is False
+
+
+async def test_failed_lookup_means_unknown_no_notice_no_retry(monkeypatch):
+    lookups = []
+
+    def handler(request):
+        if request.url.path == "/api/v2/GetUserSummary":
+            lookups.append(1)
+        return _games_page(request)
+
+    client = SpeedrunClient(
+        api_key="k",
+        transport=httpx.MockTransport(_v2_aware(handler, supporter=False, fail=True)),
+    )
+    monkeypatch.setattr(s, "_client", client)
+    s._supporter_checked = False
+    async with client:
+        result = await s.search_games("g")
+        await s.search_games("g")
+        who = await s.whoami()
+
+    assert "supporter_notice" not in result  # unknown is not "no"
+    assert who["supporter"] is None
+    assert s._supporter_checked
+    assert s._supporter is None
+
+
+async def test_notice_wrapper_keeps_tool_schema_and_docs():
+    tool = next(t for t in await s.mcp.list_tools() if t.name == "search_games")
+    assert set(tool.inputSchema["properties"]) == {"name", "limit", "offset"}
+    assert tool.inputSchema["required"] == ["name"]
+    assert tool.description.startswith("Fuzzy-search games by name")
+    assert tool.annotations.readOnlyHint is True
+    assert "supporter_notice" in s.mcp.instructions
