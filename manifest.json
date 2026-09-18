@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "speedrun-mcp",
   "display_name": "speedrun.com",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Query speedrun.com games, leaderboards, world records, players and personal bests. No API key needed.",
   "long_description": "Ask about speedrun.com data in plain language: world records, top-N leaderboards (including subcategories like 16 Star or N64 vs VC, and individual-level boards), a player's personal bests, game series, and a game's verification queue. Player ids are resolved to names and times are formatted, so answers come back compact and readable.\n\nReads need no account. Add your speedrun.com API key in the settings below to unlock `whoami` and notifications; turn on writes as well to submit and moderate runs (off by default, since those are real actions on real leaderboards).",
   "author": {
@@ -22,7 +22,12 @@
     "entry_point": "src/speedrun_mcp/__main__.py",
     "mcp_config": {
       "command": "uv",
-      "args": ["run", "--directory", "${__dirname}", "speedrun-mcp"],
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "speedrun-mcp"
+      ],
       "env": {
         "SPEEDRUN_API_KEY": "${user_config.api_key}",
         "SPEEDRUN_ENABLE_WRITES": "${user_config.enable_writes}"
@@ -30,25 +35,80 @@
     }
   },
   "tools": [
-    { "name": "search_games", "description": "Fuzzy-search games by name; returns ids and abbreviations." },
-    { "name": "get_game", "description": "A game's details plus its categories (and optionally levels)." },
-    { "name": "list_categories", "description": "A game's categories with ids and rules." },
-    { "name": "list_variables", "description": "Subcategory and filter variables with their value ids." },
-    { "name": "list_platforms", "description": "Platform ids for the leaderboard platform filter." },
-    { "name": "list_regions", "description": "Region ids for the leaderboard region filter." },
-    { "name": "get_leaderboard", "description": "A ranked leaderboard, filterable by variable, platform, region, timing, emulator and date." },
-    { "name": "get_world_record", "description": "The current #1 run for a game/category, plus any ties." },
-    { "name": "get_game_records", "description": "Every category's records for a game in one call." },
-    { "name": "search_series", "description": "Fuzzy-search game series." },
-    { "name": "get_series", "description": "A series' details and the games it contains." },
-    { "name": "search_users", "description": "Find players by username." },
-    { "name": "get_user_personal_bests", "description": "A player's personal bests across all games." },
-    { "name": "get_run", "description": "Details of a single run." },
-    { "name": "list_runs", "description": "Runs filtered by player, game, category, status or examiner." },
-    { "name": "list_unverified_runs", "description": "A game's runs awaiting verification." }
+    {
+      "name": "search_games",
+      "description": "Fuzzy-search games by name; returns ids and abbreviations."
+    },
+    {
+      "name": "get_game",
+      "description": "A game's details plus its categories (and optionally levels)."
+    },
+    {
+      "name": "list_categories",
+      "description": "A game's categories with ids and rules."
+    },
+    {
+      "name": "list_variables",
+      "description": "Subcategory and filter variables with their value ids."
+    },
+    {
+      "name": "list_platforms",
+      "description": "Platform ids for the leaderboard platform filter."
+    },
+    {
+      "name": "list_regions",
+      "description": "Region ids for the leaderboard region filter."
+    },
+    {
+      "name": "get_leaderboard",
+      "description": "A ranked leaderboard, filterable by variable, platform, region, timing, emulator and date."
+    },
+    {
+      "name": "get_world_record",
+      "description": "The current #1 run for a game/category, plus any ties."
+    },
+    {
+      "name": "get_game_records",
+      "description": "Every category's records for a game in one call."
+    },
+    {
+      "name": "search_series",
+      "description": "Fuzzy-search game series."
+    },
+    {
+      "name": "get_series",
+      "description": "A series' details and the games it contains."
+    },
+    {
+      "name": "search_users",
+      "description": "Find players by username."
+    },
+    {
+      "name": "get_user_personal_bests",
+      "description": "A player's personal bests across all games."
+    },
+    {
+      "name": "get_run",
+      "description": "Details of a single run."
+    },
+    {
+      "name": "list_runs",
+      "description": "Runs filtered by player, game, category, status or examiner."
+    },
+    {
+      "name": "list_unverified_runs",
+      "description": "A game's runs awaiting verification."
+    }
   ],
   "tools_generated": true,
-  "keywords": ["speedrun", "speedrun.com", "leaderboard", "world record", "gaming", "games"],
+  "keywords": [
+    "speedrun",
+    "speedrun.com",
+    "leaderboard",
+    "world record",
+    "gaming",
+    "games"
+  ],
   "license": "MIT",
   "user_config": {
     "api_key": {
@@ -68,7 +128,11 @@
   },
   "compatibility": {
     "claude_desktop": ">=0.10.0",
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "python": ">=3.10"
     }
